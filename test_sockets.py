@@ -176,7 +176,11 @@ def crear_sesion():
     from django.contrib.auth.models import User
     from django.contrib.sessions.backends.db import SessionStore
 
-    user = User.objects.get(username="ramon")
+    # get_or_create y no get: en una BD recien migrada (CI) el usuario no existe.
+    user, creado = User.objects.get_or_create(username="ramon")
+    if creado:
+        user.set_password("demo12345")
+        user.save()
     s = SessionStore()
     s[SESSION_KEY] = str(user.pk)
     s[BACKEND_SESSION_KEY] = "django.contrib.auth.backends.ModelBackend"

@@ -133,3 +133,23 @@ def sock(transporte):
     s = WebSocket(t.scope, t.receive, t.send, layer=groups.get_layer())
     s.transporte = t  # para que el test llegue a los eventos
     return s
+
+
+@pytest.fixture
+def crear_usuario(django_user_model):
+    """
+    Crea un usuario en cualquier Django soportado.
+
+    `objects.acreate_user()` no llego hasta Django 5.2, asi que usarlo
+    directamente rompe la suite en 4.2, 5.0 y 5.1 -- y el fallo parece de la
+    libreria cuando es solo del test.
+    """
+    from asgiref.sync import sync_to_async
+
+    async def _crear(username="ramon", **kwargs):
+        kwargs.setdefault("password", "x")
+        return await sync_to_async(django_user_model.objects.create_user)(
+            username, **kwargs
+        )
+
+    return _crear

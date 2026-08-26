@@ -160,14 +160,14 @@ async def test_login_required_sin_usuario():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_user_deja_la_sesion_lista(django_user_model):
+async def test_user_deja_la_sesion_lista(crear_usuario):
     """Sin montar cookies a mano: le pasas el User y ya."""
     @ws("panel/")
     @login_required
     async def panel(sock):
         await sock.send_json({"quien": sock.user.username, "pk": sock.user.pk})
 
-    user = await django_user_model.objects.acreate_user("ramon", password="x")
+    user = await crear_usuario("ramon")
     async with WebSocketClient("/panel/", user=user) as c:
         assert await c.receive_json() == {"quien": "ramon", "pk": user.pk}
 

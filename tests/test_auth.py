@@ -37,8 +37,8 @@ async def test_sin_cookie_el_usuario_es_anonimo(transporte):
     assert visto["user"].is_authenticated is False
 
 
-async def test_cookie_de_sesion_resuelve_el_usuario(transporte, django_user_model):
-    user = await django_user_model.objects.acreate_user("ramon", password="x")
+async def test_cookie_de_sesion_resuelve_el_usuario(transporte, crear_usuario):
+    user = await crear_usuario("ramon")
     from asgiref.sync import sync_to_async
 
     key = await sync_to_async(sesion_de)(user)
@@ -97,8 +97,8 @@ async def test_login_required_cierra_con_4401(transporte):
     assert t.textos == []
 
 
-async def test_login_required_deja_pasar_al_autenticado(transporte, django_user_model):
-    user = await django_user_model.objects.acreate_user("ramon", password="x")
+async def test_login_required_deja_pasar_al_autenticado(transporte, crear_usuario):
+    user = await crear_usuario("ramon")
     from asgiref.sync import sync_to_async
 
     key = await sync_to_async(sesion_de)(user)
@@ -116,9 +116,9 @@ async def test_login_required_deja_pasar_al_autenticado(transporte, django_user_
     assert t.textos == ["hola ramon"]
 
 
-async def test_el_orm_funciona_dentro_del_handler(transporte, django_user_model):
-    await django_user_model.objects.acreate_user("uno", password="x")
-    await django_user_model.objects.acreate_user("dos", password="x")
+async def test_el_orm_funciona_dentro_del_handler(transporte, crear_usuario):
+    await crear_usuario("uno")
+    await crear_usuario("dos")
 
     @ws("cuenta/", auth=False)
     async def handler(sock):
@@ -128,9 +128,9 @@ async def test_el_orm_funciona_dentro_del_handler(transporte, django_user_model)
     assert t.textos == ['{"total": 2}']
 
 
-async def test_sync_to_async_dentro_del_handler(transporte, django_user_model):
+async def test_sync_to_async_dentro_del_handler(transporte, crear_usuario):
     """El dispatcher envuelve en ThreadSensitiveContext, asi que el ORM sincrono va."""
-    await django_user_model.objects.acreate_user("ramon", password="x")
+    await crear_usuario("ramon")
 
     @ws("primero/", auth=False)
     async def handler(sock):
@@ -146,14 +146,19 @@ async def test_sync_to_async_dentro_del_handler(transporte, django_user_model):
 # --------------------------------------------------------- caminos alternativos
 
 
-async def test_fallback_para_django_menor_que_5(transporte, monkeypatch, django_user_model):
+async def test_fallback_para_django_menor_que_5(transporte, monkeypatch, crear_usuario):
     """
-    aget_user llego en Django 5.0. En 4.2 hay que pasar por un hilo; aqui
-    forzamos ese camino para que no se pudra sin que nos enteremos.
+    `aget_user` llego en Django 5.0. Antes hay que pasar por un hilo.
+
+    En 5.0+ forzamos ese camino con un ImportError para que no se pudra sin que
+    nos enteremos. En 4.2 no hay nada que forzar: es el camino de verdad, y
+    este mismo test lo ejecuta tal cual.
     """
     import builtins
 
-    user = await django_user_model.objects.acreate_user("antiguo", password="x")
+    import django
+
+    user = await crear_usuario("antiguo")
     from asgiref.sync import sync_to_async
 
     key = await sync_to_async(sesion_de)(user)
@@ -165,7 +170,8 @@ async def test_fallback_para_django_menor_que_5(transporte, monkeypatch, django_
             raise ImportError("aget_user no existe en Django 4.2")
         return real_import(name, globals, locals, fromlist, level)
 
-    monkeypatch.setattr(builtins, "__import__", sin_aget_user)
+    if django.VERSION >= (5, 0):
+        monkeypatch.setattr(builtins, "__import__", sin_aget_user)
 
     visto = {}
 
@@ -183,12 +189,19 @@ async def test_fallback_para_django_menor_que_5(transporte, monkeypatch, django_
 
 async def test_un_fallo_resolviendo_deja_anonimo_y_lo_loguea(transporte, monkeypatch, caplog):
     """Que la sesion explote no debe tumbar la conexion."""
-    from django_socket import auth as auth_mod
+    import django
 
-    async def revienta(carrier):
+    async def revienta_async(carrier):
         raise RuntimeError("la BD de sesiones no responde")
 
-    monkeypatch.setattr("django.contrib.auth.aget_user", revienta)
+    def revienta_sync(carrier):
+        raise RuntimeError("la BD de sesiones no responde")
+
+    # Cada version resuelve el usuario por un sitio distinto: parchea el que toca.
+    if django.VERSION >= (5, 0):
+        monkeypatch.setattr("django.contrib.auth.aget_user", revienta_async)
+    else:
+        monkeypatch.setattr("django.contrib.auth.get_user", revienta_sync)
 
     visto = {}
 
