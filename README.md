@@ -921,9 +921,12 @@ Vuelve a correr los benchmarks en tu entorno antes de dimensionar nada.
 
 - **Todo lo medido es `localhost`**: hay números hasta 6.000 conexiones y con
   Redis, pero no contra red real, TLS, mensajes grandes ni sesiones largas.
-- **Probado en Django 6.1 / Python 3.13.** Declara soporte desde Django 4.2 y
-  Python 3.10 (hay un camino alternativo para el `aget_user` que no existe antes
-  de Django 5.0, cubierto por tests), pero todavía no hay CI con matriz.
+- **Probado en local contra Django 5.2 y 6.1 (Python 3.13):** 207/207 en ambas.
+  Declara soporte desde Django 4.2, y hay un camino alternativo para el
+  `aget_user` que no existe antes de Django 5.0 — pero ese camino solo está
+  cubierto forzándolo con un monkeypatch, no ejecutándolo de verdad (Django 4.2
+  necesita Python ≤3.12). La CI cubre la matriz completa; hasta que pase en
+  verde, trata el soporte de 4.2 como declarado y no como demostrado.
 - **Los ~24 MB que uvicorn buferea por conexión** están debajo de esta capa: el
   buzón acota lo que se acumula encima, no lo de abajo. Con 100 clientes
   atascados a la vez son 2,4 GB que no se pueden evitar desde el nivel de
