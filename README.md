@@ -1,5 +1,10 @@
 # django_socket
 
+[![tests](https://github.com/ramon3198/django-socket/actions/workflows/tests.yml/badge.svg)](https://github.com/ramon3198/django-socket/actions/workflows/tests.yml)
+[![python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-blue)](https://github.com/ramon3198/django-socket)
+[![django](https://img.shields.io/badge/django-4.2%20%E2%80%93%206.1-0C4B33)](https://github.com/ramon3198/django-socket)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **WebSockets en Django sin Channels.** Instalar son dos pasos y escribir un
 handler es una función.
 
@@ -921,12 +926,10 @@ Vuelve a correr los benchmarks en tu entorno antes de dimensionar nada.
 
 - **Todo lo medido es `localhost`**: hay números hasta 6.000 conexiones y con
   Redis, pero no contra red real, TLS, mensajes grandes ni sesiones largas.
-- **Probado en local contra Django 5.2 y 6.1 (Python 3.13):** 207/207 en ambas.
-  Declara soporte desde Django 4.2, y hay un camino alternativo para el
-  `aget_user` que no existe antes de Django 5.0 — pero ese camino solo está
-  cubierto forzándolo con un monkeypatch, no ejecutándolo de verdad (Django 4.2
-  necesita Python ≤3.12). La CI cubre la matriz completa; hasta que pase en
-  verde, trata el soporte de 4.2 como declarado y no como demostrado.
+- **Django 4.2 → 6.1 y Python 3.10 → 3.13 pasan en CI**, incluido el camino
+  alternativo para el `aget_user` que no existe antes de Django 5.0: en 4.2 se
+  ejecuta de verdad, no forzado con un monkeypatch. Lo que sigue sin cubrir la
+  CI es Windows y macOS — solo corre en Linux.
 - **Los ~24 MB que uvicorn buferea por conexión** están debajo de esta capa: el
   buzón acota lo que se acumula encima, no lo de abajo. Con 100 clientes
   atascados a la vez son 2,4 GB que no se pueden evitar desde el nivel de
@@ -945,7 +948,7 @@ Vuelve a correr los benchmarks en tu entorno antes de dimensionar nada.
 ## Desarrollo
 
 ```bash
-git clone <repo> && cd django-socket
+git clone https://github.com/ramon3198/django-socket.git && cd django-socket
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
