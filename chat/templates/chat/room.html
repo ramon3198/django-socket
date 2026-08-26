@@ -1,0 +1,95 @@
+{% load django_socket %}
+<meta charset="utf-8">
+<title>django_socket — sala {{ room }}</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fbfbfd; --fg:#16161a; --line:#dcdce4; --mut:#6b6b78; --acc:#2b6cb0; --ok:#2f9e5f; --warn:#c07c22; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#131317; --fg:#e8e8ee; --line:#2c2c36; --mut:#9a9aa8; --acc:#7aa7dd; --ok:#4fbf80; --warn:#d69f4a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif; background:var(--bg); color:var(--fg); }
+  .wrap { max-width:720px; margin:0 auto; padding:32px 20px 24px; }
+  h1 { font-size:19px; margin:0 0 2px; letter-spacing:-.01em; }
+  .sub { color:var(--mut); font-size:13px; margin:0 0 20px; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.9em; background:color-mix(in srgb, var(--fg) 7%, transparent); padding:1px 5px; border-radius:4px; }
+  #log { border:1px solid var(--line); border-radius:10px; height:320px; overflow-y:auto; padding:12px 14px; background:color-mix(in srgb, var(--fg) 3%, transparent); }
+  .m { padding:3px 0; display:flex; gap:8px; align-items:baseline; }
+  .m .who { font-weight:600; flex:none; }
+  .m.sys { color:var(--mut); font-style:italic; font-size:13px; }
+  .m.retry { color:var(--warn); font-style:italic; font-size:13px; }
+  form { display:flex; gap:8px; margin-top:12px; }
+  input[type=text] { flex:1; padding:9px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  button { padding:9px 18px; border:0; border-radius:8px; background:var(--acc); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  .status { margin-top:10px; font-size:12.5px; color:var(--mut); display:flex; align-items:center; gap:6px; }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--mut); flex:none; }
+  .on .dot { background:var(--ok); }
+  .retrying .dot { background:var(--warn); }
+</style>
+
+<div class="wrap">
+  <h1>Sala «{{ room }}»</h1>
+  <p class="sub">Ábrela en otra pestaña para ver el broadcast. Para probar la reconexión, para el servidor y vuelve a arrancarlo: se reengancha solo y suelta lo que escribiste mientras tanto. Handler: <code>chat/sockets.py</code></p>
+
+  <div id="log"></div>
+
+  <form id="f">
+    <input type="text" id="msg" placeholder="Escribe y pulsa Enter…" autocomplete="off" autofocus>
+    <button type="submit">Enviar</button>
+  </form>
+
+  <p class="status" id="status"><span class="dot"></span><span id="txt">conectando…</span></p>
+</div>
+
+{% ws_client %}
+<script>
+  const log = document.getElementById("log");
+  const status = document.getElementById("status");
+  const txt = document.getElementById("txt");
+
+  function line(text, clase, who) {
+    const el = document.createElement("div");
+    el.className = "m " + (clase || "sys");
+    if (who) {
+      const w = document.createElement("span");
+      w.className = "who"; w.textContent = who + ":";
+      el.appendChild(w);
+    }
+    el.appendChild(document.createTextNode(text));
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  const sock = djangoSocket("/chat/{{ room|escapejs }}/", {
+    key: "tipo",                       // este handler usa "tipo", no "type"
+
+    onOpen(esReconexion) {
+      status.className = "status on";
+      txt.textContent = "conectado";
+      if (esReconexion) line("reconectado" + (sock.pending ? ` — enviando ${sock.pending} pendiente(s)` : ""));
+    },
+
+    onClose(e, reintentara) {
+      status.className = "status" + (reintentara ? " retrying" : "");
+      txt.textContent = reintentara
+        ? "sin conexión — reintentando…"
+        : `desconectado (code ${e.code}${e.reason ? " — " + e.reason : ""})`;
+      // Un 4401/4404 no se reintenta: reconectar ahí sería un bucle infinito.
+      if (!reintentara && e.code >= 4000) line(`el servidor cerró a propósito: ${e.code}`);
+    },
+
+    onRetry(intento, espera) {
+      line(`reintento ${intento} en ${(espera / 1000).toFixed(1)}s`, "retry");
+    },
+  });
+
+  sock.on("mensaje", (d) => line(d.texto, "", d.quien));
+  sock.on("entra",   (d) => line(`${d.quien} entró a la sala`));
+  sock.on("sale",    (d) => line(`${d.quien} salió de la sala`));
+
+  document.getElementById("f").onsubmit = (e) => {
+    e.preventDefault();
+    const input = document.getElementById("msg");
+    if (!input.value.trim()) return;
+    // Devuelve false si no hay conexión: se encola y sale al reconectar.
+    if (!sock.send(input.value)) line("sin conexión: se enviará al reconectar");
+    input.value = "";
+  };
+</script>

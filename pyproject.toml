@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "django-socket"
+version = "0.1.0"
+description = "WebSockets en Django: pip install y una linea en INSTALLED_APPS."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+classifiers = [
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.0",
+    "Framework :: Django :: 5.1",
+    "Framework :: Django :: 5.2",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = [
+    "django>=4.2",
+    "asgiref>=3.6",
+]
+
+[project.optional-dependencies]
+redis = ["redis>=5.0"]
+dev = [
+    "uvicorn[standard]>=0.27",
+    "websockets>=12",
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-django>=4.8",
+    "redis>=5.0",
+    "coverage>=7",
+]
+
+[tool.setuptools]
+packages = [
+    "django_socket",
+    "django_socket.management",
+    "django_socket.management.commands",
+    "django_socket.templatetags",
+]
+
+[tool.setuptools.package-data]
+django_socket = ["static/django_socket/*.js"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "tests.settings"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["error::RuntimeWarning"]

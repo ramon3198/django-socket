@@ -1,0 +1,9 @@
+{
+  "name": "django-socket-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tests del cliente JS de django_socket. Sin dependencias: usa el runner de Node (>=20).",
+  "scripts": {
+    "test": "node --test tests/js/*.test.js"
+  }
+}
