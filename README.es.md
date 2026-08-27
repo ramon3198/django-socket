@@ -1160,6 +1160,10 @@ python manage.py migrate
 python manage.py runserver
 ```
 
+- `http://127.0.0.1:8000/ejemplos/` — **cuatro patrones que la gente construye
+  de verdad**, cada uno ejecutable en la página: progreso de una tarea en
+  segundo plano, notificaciones por usuario, presencia y un dashboard en vivo.
+  El código comentado está en [`ejemplos/sockets.py`](ejemplos/sockets.py).
 - `http://127.0.0.1:8000/sala/general/` — chat, ábrelo en dos pestañas. Para ver
   la reconexión, para el servidor y vuelve a arrancarlo.
 - `chat/sockets.py` — todos los ejemplos en un archivo.

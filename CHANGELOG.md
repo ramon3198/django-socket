@@ -4,6 +4,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 Versioning: while below 1.0, **minor versions may change the API**. Patch
 versions never do.
 
+## Unreleased
+
+### Added
+
+- `ejemplos/` — four runnable patterns in the demo project: background task
+  progress, per-user notifications, presence, and a live dashboard. Each one
+  documents the mistake that's easy to make with it. Not shipped in the wheel;
+  they're reference code in the repo.
+
 ## [0.2.0] — 2026-08-27
 
 ### Added

@@ -1162,6 +1162,10 @@ python manage.py migrate
 python manage.py runserver
 ```
 
+- `http://127.0.0.1:8000/ejemplos/` — **four patterns people actually build**,
+  each one runnable in the page: background task progress, per-user
+  notifications, presence, and a live dashboard. The commented source is in
+  [`ejemplos/sockets.py`](ejemplos/sockets.py).
 - `http://127.0.0.1:8000/sala/general/` — chat, open it in two tabs. To see the
   reconnect, stop the server and start it again.
 - `chat/sockets.py` — every example in one file.
