@@ -4,21 +4,38 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "django-socket"
-version = "0.2.0"
+version = "0.2.1"
 description = "WebSockets for Django: one decorator, one async function, one line in INSTALLED_APPS."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 classifiers = [
+    # Los directorios de paquetes (Django Packages entre ellos) leen estos
+    # classifiers, no los campos modernos de metadatos. Sin las lineas de
+    # "Python :: 3.x" la rejilla comparativa muestra literalmente
+    # "Python 3? No", que es peor que no aparecer.
+    #
+    # No va el classifier de licencia a proposito: PEP 639 lo sustituye por el
+    # campo `license = "MIT"` de arriba, y setuptools rechaza tener los dos.
+    # Algun directorio todavia lee el antiguo y mostrara "UNKNOWN"; se aguanta,
+    # el moderno es el correcto y PyPI lo muestra bien.
+    "Development Status :: 4 - Beta",
     "Environment :: Web Environment",
     "Framework :: Django",
     "Framework :: Django :: 4.2",
     "Framework :: Django :: 5.0",
     "Framework :: Django :: 5.1",
     "Framework :: Django :: 5.2",
+    "Framework :: Django :: 6.0",
+    "Framework :: Django :: 6.1",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Internet :: WWW/HTTP",
+    "Typing :: Typed",
 ]
 dependencies = [
     "django>=4.2",

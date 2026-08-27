@@ -4,6 +4,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 Versioning: while below 1.0, **minor versions may change the API**. Patch
 versions never do.
 
+## [0.2.1] — 2026-08-27
+
+### Fixed
+
+- **Trove classifiers.** Package directories read these, not the modern
+  metadata fields, and without the `Programming Language :: Python :: 3.x`
+  lines the Django Packages comparison grid literally showed **"Python 3? No"**
+  next to this package. Added those, plus `Development Status`,
+  `Framework :: Django :: 6.0/6.1` and `Typing :: Typed`.
+
+  The license classifier is deliberately *not* there: PEP 639 replaces it with
+  the `license = "MIT"` field, and setuptools refuses to accept both. Some
+  directories still read the old one and will show "UNKNOWN" until they catch
+  up. PyPI itself shows it correctly.
+
+### Added
+
+- `ejemplos/` — four runnable patterns in the demo project: background task
+  progress, per-user notifications, presence, and a live dashboard. Each one
+  documents the mistake that's easy to make with it. Not shipped in the wheel;
+  they're reference code in the repo.
+
 ## Unreleased
 
 ### Added
