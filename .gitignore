@@ -7,3 +7,6 @@ dist/
 db.sqlite3
 .coverage
 node_modules/
+
+# Documento de revision interno, no va al repo publico
+REVISION.md
