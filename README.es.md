@@ -42,11 +42,14 @@ está donde esperas encontrarlo.
 [`Events`](#enrutar-por-tipo-con-events) ·
 [Autenticación](#usuarios-y-autenticación) ·
 [Cliente JavaScript](#cliente-javascript) ·
+[Middleware](#middleware) ·
 [Testear](#testear-tus-handlers)
 
 **Operación** ·
 [Producción](#producción) ·
+[Detrás de un proxy](#detrás-de-un-proxy-inverso) ·
 [Seguridad](#seguridad-validación-de-origen) ·
+[Límites de tasa](#límites-de-tasa) ·
 [Clientes lentos](#clientes-lentos) ·
 [Conexiones zombis](#conexiones-zombis) ·
 [Configuración](#configuración-completa) ·
@@ -432,8 +435,68 @@ async def panel(sock):
     await sock.send_json({"hola": sock.user.username})
 ```
 
-Con `@ws(..., auth=False)` te ahorras la consulta de sesión en endpoints
-públicos.
+### Auth por token, para SPAs y apps móviles
+
+La cookie de sesión solo funciona si el navegador la manda, o sea con el
+frontend servido desde el mismo sitio. Un React en otro dominio, o un cliente
+móvil, no tiene cookie. Para esos:
+
+```python
+DJANGO_SOCKET = {
+    "AUTH": ["session", "token"],       # se prueban en orden, gana el primero
+    "TOKEN_RESOLVER": "miapp.auth.desde_jwt",
+}
+```
+
+```python
+async def desde_jwt(token):
+    datos = jwt.decode(token, KEY, algorithms=["HS256"])
+    return await User.objects.filter(pk=datos["sub"]).afirst()
+```
+
+La librería transporta el token; validarlo es cosa tuya, porque puede ser un
+JWT, el de DRF, o algo propio. Si ya usas `rest_framework.authtoken` y no
+configuras resolver, se usa ese.
+
+**Por dónde viaja el token importa.** Los navegadores **no pueden poner
+cabeceras** en un WebSocket — la API `new WebSocket(url, protocols)` solo deja
+tocar la URL y `Sec-WebSocket-Protocol`. Así que:
+
+| Vía | Quién puede | Nota |
+|---|---|---|
+| `Sec-WebSocket-Protocol: bearer, <token>` | navegadores | **la recomendada**: no va en la URL, luego no acaba en tus logs |
+| `Authorization: Bearer <token>` | clientes nativos | los navegadores no pueden |
+| `?token=<token>` | todos | **queda escrito en los logs de acceso**, el tuyo y el de cada proxy |
+
+```js
+new WebSocket("wss://api.ejemplo.com/feed/", ["bearer", token]);
+```
+
+Se leen en ese orden, así que si llegan varias gana la más segura.
+
+### Por ruta, y el tuyo propio
+
+```python
+@ws("feed/", auth="token")                 # aquí solo token
+@ws("panel/", auth=["session", "token"])   # cualquiera de las dos
+@ws("publico/", auth=False)                # ni lo intentes; sock.user es None
+@ws("iot/", auth=mi_autenticador)          # async(sock) -> user | None
+```
+
+Un autenticador es una función y ya:
+
+```python
+async def por_api_key(sock):
+    clave = sock.query_params.get("k")
+    return await Cliente.objects.filter(api_key=clave).afirst()
+```
+
+Un autenticador que no existe falla **al importar**, no en la primera conexión
+de alguien.
+
+> Con auth activo, `sock.user` es siempre un objeto usuario — `AnonymousUser`
+> cuando nadie lo reconoció. Solo es `None` con `auth=False`, así que
+> `sock.user.is_authenticated` nunca necesita comprobar `None` antes.
 
 ### El ORM funciona con normalidad
 
@@ -519,6 +582,58 @@ Y `sock.connected`, `sock.pending`, `sock.close()`, `sock.reconnect()`,
 
 ---
 
+## Middleware
+
+Para lo que hay que hacer en todas las conexiones: trazas, métricas, reportar
+errores, limitar conexiones.
+
+```python
+# miapp/ws.py
+import time, logging
+
+log = logging.getLogger("miapp.sockets")
+
+async def medir(sock, siguiente):
+    inicio = time.monotonic()
+    try:
+        await siguiente()
+    finally:
+        log.info("%s duró %.1fs", sock.path, time.monotonic() - inicio)
+```
+
+```python
+DJANGO_SOCKET = {"MIDDLEWARE": ["miapp.ws.medir"]}
+```
+
+Se aplican en orden: el primero de la lista es el más externo, igual que el
+`MIDDLEWARE` de Django. Corre **después** de autenticar, así que `sock.user` ya
+está resuelto. Para cortar una conexión, cierra y no llames a `siguiente()`:
+
+```python
+async def solo_de_pago(sock, siguiente):
+    if not await es_de_pago(sock.user):
+        await sock.close(4403, "Plan insuficiente")
+        return
+    await siguiente()
+```
+
+Vienen dos hechos:
+
+```python
+from django_socket.middleware import max_conexiones_por_usuario, registrar
+
+DJANGO_SOCKET = {"MIDDLEWARE": [
+    max_conexiones_por_usuario(10),   # cierra la 11ª con 4429
+    registrar(),                      # una línea de log por conexión
+]}
+```
+
+`max_conexiones_por_usuario` cuenta por proceso: con N workers el tope real es
+`límite × N`. Uno global necesitaría contadores en Redis, y eso solo compensa
+si de verdad necesitas esa precisión.
+
+---
+
 ## Testear tus handlers
 
 Sin levantar servidor, sin puertos, en milisegundos:
@@ -587,6 +702,49 @@ uvicorn miproyecto.asgi:application --host 0.0.0.0 --port 8000 --workers 4
 gunicorn miproyecto.asgi:application -k uvicorn.workers.UvicornWorker -w 4
 ```
 
+### Detrás de un proxy inverso
+
+Aquí es donde se rompe la mayoría de despliegues con WebSockets, y el síntoma
+—un 400 o un 502— parece un bug de la librería sin serlo. Hay que decirle al
+proxy que deje pasar el cambio de protocolo:
+
+```nginx
+location /ws/ {
+    proxy_pass http://app;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;      # <- estas dos
+    proxy_set_header Connection "upgrade";       # <- son todo el asunto
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_read_timeout 3600s;                    # o corta los sockets a los 60s
+}
+```
+
+Caddy no necesita nada, hace de proxy para WebSockets por defecto:
+
+```
+ejemplo.com {
+    reverse_proxy app:8000
+}
+```
+
+**Cómo saber si tu proxy se está comiendo el upgrade.** Un handshake correcto
+es un `HTTP/1.1 101 Switching Protocols`. Compruébalo sin navegador de por
+medio:
+
+```bash
+curl -i -N -o -   -H "Connection: Upgrade" -H "Upgrade: websocket"   -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=="   -H "Sec-WebSocket-Version: 13"   -H "Origin: https://ejemplo.com"   https://ejemplo.com/ws/echo/
+```
+
+- `101` — el proxy está bien, el problema está en otro sitio.
+- `400` — llegó a Django, pero rechazó el origen o la ruta. Mira `manage.py ws`
+  y tu `ALLOWED_HOSTS`.
+- `200` o `502` — el proxy se tragó el upgrade. Faltan esas dos cabeceras.
+
+Si vas detrás de un balanceador, ten en cuenta que un WebSocket es una conexión
+larga: sube el timeout de inactividad (el ALB viene con 60 s) o tus sockets se
+caerán cada minuto sin motivo aparente.
+
 ### Con más de un worker, necesitas Redis
 
 La capa de memoria solo conoce los sockets de su propio proceso, así que un
@@ -648,6 +806,38 @@ DJANGO_SOCKET = {
 ```
 
 `manage.py check` avisa si dejas `"*"` con `DEBUG=False`.
+
+---
+
+## Límites de tasa
+
+Antes de exponer un socket al público, acota lo rápido que puede mandar un
+cliente:
+
+```python
+@ws("chat/", rate_limit="60/m")            # por ruta
+DJANGO_SOCKET = {"RATE_LIMIT": "60/m"}     # o para todas
+```
+
+Formatos: `"10/s"`, `"60/m"`, `"100/5m"`, `"1000/h"`. Pasarse cierra con
+**4429**, y el motivo dice cuánto esperar.
+
+Es un **token bucket, no un contador por ventana**, y esa diferencia es lo que
+lo hace usable: un contador rechaza el mensaje 11 aunque los 10 anteriores
+fueran de hace 59 segundos. El cubo se rellena de forma continua, así que
+aguanta la ráfaga normal de alguien escribiendo rápido y solo corta cuando el
+ritmo *sostenido* se pasa.
+
+Para flujos que legítimamente dan picos, sube el burst sin subir el ritmo
+sostenido:
+
+```python
+@ws("cursor/", rate_limit="30/s", burst=100)
+```
+
+El límite es por socket. **No** es una defensa contra una botnet abriendo miles
+de conexiones: para eso están `max_conexiones_por_usuario` y algo por delante
+de la aplicación.
 
 ---
 
@@ -745,6 +935,12 @@ DJANGO_SOCKET = {
     "PATCH_ASGI": True,           # False = declara ASGIApplication() tú mismo
     "SEND_QUEUE_MAX": 256,        # mensajes encolados por socket, para difusión
     "SEND_QUEUE_FULL": "close",   # "close" (echa al lento) | "drop_oldest"
+
+    "AUTH": ["session"],          # autenticadores, se prueban en orden
+    "TOKEN_RESOLVER": None,       # async(token) -> user | None
+    "MIDDLEWARE": [],             # envoltorios async(sock, siguiente)
+    "RATE_LIMIT": None,           # "60/m" para todas las rutas
+    "RATE_LIMIT_BURST": None,     # margen por encima del ritmo sostenido
 }
 ```
 
@@ -759,6 +955,7 @@ Una clave mal escrita la caza `manage.py check` (`django_socket.E001`).
 | `4400` | El cliente mandó algo que no es JSON válido |
 | `4401` | `@login_required` y no hay sesión |
 | `4404` | Ninguna ruta casa con ese path |
+| `4429` | Demasiado rápido: límite de tasa, o demasiadas conexiones a la vez |
 | `1013` | El cliente no consume: buzón lleno, se le echa del grupo |
 | `1011` | Excepción sin capturar en el handler (queda en el log) |
 | HTTP 403 | Origin no permitido — el handshake ni llega a completarse |
@@ -927,7 +1124,7 @@ pip install -e ".[dev]"
 ### Tests
 
 ```bash
-pytest                              # 207 tests, ~7 s, sin levantar nada
+pytest                              # 261 tests, ~10 s, sin levantar nada
 node --test tests/js/*.test.js      # 35 tests del cliente JS, sin npm install
 ```
 

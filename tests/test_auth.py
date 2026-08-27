@@ -214,10 +214,18 @@ async def test_un_fallo_resolviendo_deja_anonimo_y_lo_loguea(transporte, monkeyp
     assert "la BD de sesiones no responde" in caplog.text
 
 
-async def test_sin_app_de_auth_no_se_resuelve_nada(transporte, monkeypatch):
-    from django_socket import auth as auth_mod
+async def test_con_auth_activo_user_nunca_es_none(transporte, monkeypatch):
+    """
+    Con `auth` activo, `sock.user` siempre es un objeto usuario.
 
-    monkeypatch.setattr(auth_mod, "_auth_installed", lambda: False)
+    Si ningun autenticador reconoce a nadie -- sin cookie, sin las apps de auth
+    instaladas, token invalido -- queda `AnonymousUser`, no `None`. Asi
+    `sock.user.is_authenticated` funciona sin comprobar None antes, que era la
+    trampa del comportamiento anterior.
+    """
+    from django.apps import apps
+
+    monkeypatch.setattr(apps, "is_installed", lambda n: False)
 
     visto = {}
 
@@ -227,4 +235,17 @@ async def test_sin_app_de_auth_no_se_resuelve_nada(transporte, monkeypatch):
         visto["session"] = sock.session
 
     await correr(transporte(path="/quien/").cliente_conecta().cliente_cierra())
-    assert visto == {"user": None, "session": None}
+    assert isinstance(visto["user"], AnonymousUser)
+    assert visto["session"] is None       # sin app de sesiones, no hay sesion
+
+
+async def test_auth_false_deja_user_en_none(transporte):
+    """`auth=False` es lo unico que deja `sock.user` sin objeto."""
+    visto = {}
+
+    @ws("publico2/", auth=False)
+    async def handler(sock):
+        visto["user"] = sock.user
+
+    await correr(transporte(path="/publico2/").cliente_conecta().cliente_cierra())
+    assert visto["user"] is None

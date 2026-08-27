@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "django-socket"
-version = "0.1.0"
+version = "0.2.0"
 description = "WebSockets for Django: one decorator, one async function, one line in INSTALLED_APPS."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,6 +24,12 @@ dependencies = [
     "django>=4.2",
     "asgiref>=3.6",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ramon3198/django-socket"
+Documentation = "https://github.com/ramon3198/django-socket#readme"
+Changelog = "https://github.com/ramon3198/django-socket/blob/main/CHANGELOG.md"
+Issues = "https://github.com/ramon3198/django-socket/issues"
 
 [project.optional-dependencies]
 redis = ["redis>=5.0"]
@@ -46,7 +52,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-django_socket = ["static/django_socket/*.js"]
+django_socket = ["static/django_socket/*.js", "py.typed"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.settings"

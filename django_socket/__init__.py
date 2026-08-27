@@ -13,7 +13,7 @@ Instalar es: `pip install django-socket` y añadirlo a INSTALLED_APPS. Ya esta.
 """
 
 from .asgi import ASGIApplication
-from .auth import login_required
+from .authentication import extraer_token, login_required
 from .events import Events
 from .groups import (
     BaseLayer,
@@ -42,6 +42,7 @@ __all__ = [
     "broadcast",
     "broadcast_sync",
     "login_required",
+    "extraer_token",
     # Tipos, para anotar
     "WebSocket",
     "Message",

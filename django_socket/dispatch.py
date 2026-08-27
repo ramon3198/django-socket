@@ -12,9 +12,10 @@ from urllib.parse import urlparse
 
 from asgiref.sync import ThreadSensitiveContext
 
-from . import auth as auth_mod
+from . import authentication
+from . import middleware as mw
 from . import groups, routing
-from .websocket import InvalidJSON, WebSocket, WebSocketDisconnect
+from .websocket import InvalidJSON, RateLimited, WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger("django_socket")
 
@@ -104,16 +105,32 @@ async def handle_websocket(scope, receive, send) -> None:
     sock.path_params = kwargs
 
     async with ThreadSensitiveContext():
-        if route.auth:
-            await auth_mod.resolve(sock)
+        if route.auth is not False:
+            await authentication.resolve(sock, route.auth)
 
-        try:
+        from . import ratelimit
+
+        sock._rate = ratelimit.crear(route.rate_limit, route.burst)
+
+        async def ejecutar():
             if route.group:
                 # group="room:{room}" se rellena con los parametros de la ruta.
                 await sock.join(route.group.format(**kwargs))
             await route.handler(sock, **kwargs)
+
+        try:
+            # El middleware va por fuera del handler pero por dentro de este
+            # try, para que un fallo suyo se trate igual que uno del handler.
+            await mw.aplicar(sock, ejecutar)
         except WebSocketDisconnect:
             pass  # el cliente se fue; salida normal
+        except RateLimited as exc:
+            logger.warning(
+                "django_socket: %s va demasiado rapido en %s (%s)",
+                sock.client, sock.path, exc,
+            )
+            await sock.close(exc.code, f"Rate limit; retry in {exc.espera:.0f}s")
+            return
         except InvalidJSON as exc:
             # Culpa del cliente, no del servidor: un aviso y un codigo que lo
             # diga. Nada de traceback ni de 1011, que harian pensar que el bug

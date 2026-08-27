@@ -13,9 +13,11 @@ class Route(NamedTuple):
     pattern: RoutePattern
     handler: Callable
     name: str
-    auth: bool
+    auth: Any
     group: str | None
     route: str
+    rate_limit: str | None
+    burst: float | None
 
 
 _routes: list[Route] = []
@@ -25,7 +27,9 @@ def ws(
     route: str,
     *,
     group: str | None = None,
-    auth: bool = True,
+    auth: Any = True,
+    rate_limit: str | None = None,
+    burst: float | None = None,
     name: str | None = None,
 ):
     """
@@ -44,8 +48,20 @@ def ws(
     al conectar, sale al desconectar, y `sock.broadcast(dato)` va ahi por
     defecto.
 
-    `auth=False` salta la resolucion de sesion y usuario si el endpoint es
-    publico (una consulta menos por conexion).
+    `auth` decide como se resuelve `sock.user`:
+
+        auth=True                  los autenticadores de settings (por defecto,
+                                   la sesion de Django)
+        auth=False                 ninguno; `sock.user` queda a None
+        auth="token"               solo por token
+        auth=["session", "token"]  el primero que reconozca a alguien
+        auth=mi_funcion            async(sock) -> user | None
+
+    Ver `django_socket.authentication`.
+
+    `rate_limit` acota los mensajes entrantes de cada socket ("60/m", "10/s").
+    Al pasarse se cierra con 4429. `burst` deja pasar picos mayores sin subir
+    el ritmo sostenido. Ver `django_socket.ratelimit`.
     """
 
     def decorator(handler: Callable) -> Callable:
@@ -60,6 +76,16 @@ def ws(
             )
         normalized = route.lstrip("/")
         _check_group_template(group, normalized, handler)
+        if auth is not False:
+            # Falla al importar si el autenticador no existe, no en la primera
+            # conexion del primer usuario.
+            from .authentication import resolver_lista
+
+            resolver_lista(auth)
+        if rate_limit is not None:
+            from .ratelimit import parsear
+
+            parsear(rate_limit)     # revienta ahora si el formato esta mal
 
         for existing in _routes:
             if existing.route == normalized:
@@ -76,6 +102,8 @@ def ws(
                 auth=auth,
                 group=group,
                 route=normalized,
+                rate_limit=rate_limit,
+                burst=burst,
             )
         )
         return handler

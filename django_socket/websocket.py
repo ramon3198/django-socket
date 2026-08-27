@@ -22,6 +22,15 @@ class WebSocketClosed(Exception):
     """Se intento usar un socket que el servidor ya cerro."""
 
 
+class RateLimited(Exception):
+    """El cliente manda mas deprisa de lo permitido."""
+
+    def __init__(self, espera: float, code: int):
+        self.espera = espera
+        self.code = code
+        super().__init__(f"Rate limit excedido; reintenta en {espera:.1f}s")
+
+
 class InvalidJSON(ValueError):
     """
     El cliente mando algo que no es JSON valido.
@@ -154,6 +163,7 @@ class WebSocket:
         self._state = CONNECTING
         self._groups: set[str] = set()
         self.group: str | None = None   # destino por defecto de broadcast()
+        self._rate = None                           # cubo de rate limit
         self._outbox: asyncio.Queue | None = None   # solo para difusion
         self._outbox_full: str = "close"
         self._writer: asyncio.Task | None = None
@@ -311,6 +321,11 @@ class WebSocket:
             )
         await self._ensure_open()
         event = await self._receive()
+        if event["type"] == "websocket.receive" and self._rate is not None:
+            if not self._rate.consumir():
+                from .ratelimit import CLOSE_RATE_LIMIT
+
+                raise RateLimited(self._rate.espera, CLOSE_RATE_LIMIT)
         if event["type"] == "websocket.disconnect":
             self._state = CLOSED
             self.close_code = event.get("code", 1005)

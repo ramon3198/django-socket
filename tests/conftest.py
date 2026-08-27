@@ -153,3 +153,15 @@ def crear_usuario(django_user_model):
         )
 
     return _crear
+
+
+@pytest.fixture(autouse=True)
+def caches_limpias():
+    """MIDDLEWARE y TOKEN_RESOLVER se cachean; en tests hay que releerlos."""
+    from django_socket import authentication, middleware
+
+    middleware.limpiar_cache()
+    authentication._limpiar_cache_resolver()
+    yield
+    middleware.limpiar_cache()
+    authentication._limpiar_cache_resolver()

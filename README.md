@@ -40,11 +40,14 @@ the code after the loop, and Django's user is right where you'd expect it.
 [`Events`](#routing-by-message-type-with-events) ·
 [Authentication](#users-and-authentication) ·
 [JavaScript client](#javascript-client) ·
+[Middleware](#middleware) ·
 [Testing](#testing-your-handlers)
 
 **Operations** ·
 [Production](#production) ·
+[Behind a proxy](#behind-a-reverse-proxy) ·
 [Security](#security-origin-validation) ·
+[Rate limiting](#rate-limiting) ·
 [Slow clients](#slow-clients) ·
 [Zombie connections](#zombie-connections) ·
 [Settings](#all-settings) ·
@@ -432,7 +435,67 @@ async def dashboard(sock):
     await sock.send_json({"hello": sock.user.username})
 ```
 
-With `@ws(..., auth=False)` you skip the session query on public endpoints.
+### Token auth, for SPAs and mobile apps
+
+The session cookie only works when the browser sends it — same-site frontend.
+A React app on another domain, or a mobile client, has no cookie. For those:
+
+```python
+DJANGO_SOCKET = {
+    "AUTH": ["session", "token"],       # tried in order, first match wins
+    "TOKEN_RESOLVER": "myapp.auth.from_jwt",
+}
+```
+
+```python
+async def from_jwt(token):
+    data = jwt.decode(token, KEY, algorithms=["HS256"])
+    return await User.objects.filter(pk=data["sub"]).afirst()
+```
+
+The library moves the token; validating it is yours, because it could be a JWT,
+a DRF token, or something of your own. If you already use
+`rest_framework.authtoken` and set no resolver, that one is used.
+
+**Where the token travels matters.** Browsers *cannot set headers* on a
+WebSocket — the `new WebSocket(url, protocols)` API only lets you touch the URL
+and `Sec-WebSocket-Protocol`. So:
+
+| How | Who can use it | Note |
+|---|---|---|
+| `Sec-WebSocket-Protocol: bearer, <token>` | browsers | **recommended**: not in the URL, so not in your logs |
+| `Authorization: Bearer <token>` | native clients | browsers can't |
+| `?token=<token>` | everyone | **ends up in access logs**, yours and every proxy's |
+
+```js
+new WebSocket("wss://api.example.com/feed/", ["bearer", token]);
+```
+
+They're read in that order, so the safest one wins if several are present.
+
+### Per-route, and your own
+
+```python
+@ws("feed/", auth="token")                 # only token here
+@ws("panel/", auth=["session", "token"])   # either
+@ws("public/", auth=False)                 # don't even try; sock.user is None
+@ws("iot/", auth=my_authenticator)         # async(sock) -> user | None
+```
+
+An authenticator is just a function:
+
+```python
+async def by_api_key(sock):
+    key = sock.query_params.get("k")
+    return await Client.objects.filter(api_key=key).afirst()
+```
+
+An unknown authenticator name fails **at import time**, not on someone's first
+connection.
+
+> With auth active, `sock.user` is always a user object — `AnonymousUser` when
+> nobody recognised the client. It's `None` only with `auth=False`, so
+> `sock.user.is_authenticated` never needs a `None` check first.
 
 ### The ORM works normally
 
@@ -518,6 +581,58 @@ Plus `sock.connected`, `sock.pending`, `sock.close()`, `sock.reconnect()`,
 
 ---
 
+## Middleware
+
+For what has to happen on every connection: tracing, metrics, reporting errors,
+connection limits.
+
+```python
+# myapp/ws.py
+import time, logging
+
+log = logging.getLogger("myapp.sockets")
+
+async def measure(sock, next_):
+    start = time.monotonic()
+    try:
+        await next_()
+    finally:
+        log.info("%s took %.1fs", sock.path, time.monotonic() - start)
+```
+
+```python
+DJANGO_SOCKET = {"MIDDLEWARE": ["myapp.ws.measure"]}
+```
+
+Applied in order — the first in the list is the outermost, the same as Django's
+`MIDDLEWARE`. It runs **after** authentication, so `sock.user` is already there.
+To reject a connection, close and don't call `next_()`:
+
+```python
+async def paid_only(sock, next_):
+    if not await is_paid(sock.user):
+        await sock.close(4403, "Plan required")
+        return
+    await next_()
+```
+
+Two come included:
+
+```python
+from django_socket.middleware import max_conexiones_por_usuario, registrar
+
+DJANGO_SOCKET = {"MIDDLEWARE": [
+    max_conexiones_por_usuario(10),   # closes the 11th with 4429
+    registrar(),                      # one log line per connection
+]}
+```
+
+`max_conexiones_por_usuario` counts per process: with N workers the real ceiling
+is `limit × N`. A global one would need counters in Redis, which is only worth
+it if you actually need that precision.
+
+---
+
 ## Testing your handlers
 
 No server, no ports, milliseconds:
@@ -587,6 +702,49 @@ uvicorn myproject.asgi:application --host 0.0.0.0 --port 8000 --workers 4
 gunicorn myproject.asgi:application -k uvicorn.workers.UvicornWorker -w 4
 ```
 
+### Behind a reverse proxy
+
+This is where most WebSocket deployments break, and the symptom — a 400 or a 502
+— looks like a library bug when it isn't. The proxy has to be told to let the
+protocol upgrade through:
+
+```nginx
+location /ws/ {
+    proxy_pass http://app;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;      # <- these two
+    proxy_set_header Connection "upgrade";       # <- are the whole thing
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_read_timeout 3600s;                    # or idle sockets get cut at 60s
+}
+```
+
+Caddy needs nothing — it proxies WebSockets by default:
+
+```
+example.com {
+    reverse_proxy app:8000
+}
+```
+
+**How to tell if your proxy is eating the upgrade.** A successful handshake is
+an `HTTP/1.1 101 Switching Protocols`. Check it without a browser in the way:
+
+```bash
+curl -i -N -o -   -H "Connection: Upgrade" -H "Upgrade: websocket"   -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=="   -H "Sec-WebSocket-Version: 13"   -H "Origin: https://example.com"   https://example.com/ws/echo/
+```
+
+- `101` — the proxy is fine, the problem is elsewhere.
+- `400` — it reached Django, but the origin or the route was rejected. Check
+  `manage.py ws` and your `ALLOWED_HOSTS`.
+- `200` or `502` — the proxy swallowed the upgrade. Those two headers are
+  missing.
+
+If you're behind a load balancer, WebSockets are long-lived connections: raise
+the idle timeout (ALB defaults to 60 s) or your sockets will drop every minute
+for no visible reason.
+
 ### With more than one worker you need Redis
 
 The memory layer only knows the sockets in its own process, so a broadcast
@@ -649,6 +807,36 @@ DJANGO_SOCKET = {
 ```
 
 `manage.py check` warns if you leave `"*"` with `DEBUG=False`.
+
+---
+
+## Rate limiting
+
+Before you expose a socket publicly, cap how fast a client can send:
+
+```python
+@ws("chat/", rate_limit="60/m")            # per route
+DJANGO_SOCKET = {"RATE_LIMIT": "60/m"}     # or for all of them
+```
+
+Formats: `"10/s"`, `"60/m"`, `"100/5m"`, `"1000/h"`. Going over closes with
+**4429**, and the reason says how long to wait.
+
+It's a **token bucket, not a per-window counter**, and the difference is what
+makes it usable: a counter rejects message 11 even when the previous 10 were 59
+seconds ago. The bucket refills continuously, so it absorbs the normal burst of
+someone typing fast and only cuts when the *sustained* rate goes over.
+
+For streams that legitimately spike, raise the burst without raising the
+sustained rate:
+
+```python
+@ws("cursor/", rate_limit="30/s", burst=100)
+```
+
+The limit is per socket. It is not a defence against a botnet opening thousands
+of connections — for that you want `max_conexiones_por_usuario` and something in
+front of the app.
 
 ---
 
@@ -748,6 +936,12 @@ DJANGO_SOCKET = {
     "PATCH_ASGI": True,           # False = declare ASGIApplication() yourself
     "SEND_QUEUE_MAX": 256,        # messages queued per socket, for fan-out
     "SEND_QUEUE_FULL": "close",   # "close" (evict the slow one) | "drop_oldest"
+
+    "AUTH": ["session"],          # authenticators, tried in order
+    "TOKEN_RESOLVER": None,       # async(token) -> user | None
+    "MIDDLEWARE": [],             # async(sock, next) wrappers
+    "RATE_LIMIT": None,           # "60/m" for every route
+    "RATE_LIMIT_BURST": None,     # allowance above the sustained rate
 }
 ```
 
@@ -762,6 +956,7 @@ A misspelled key is caught by `manage.py check` (`django_socket.E001`).
 | `4400` | The client sent something that isn't valid JSON |
 | `4401` | `@login_required` and there's no session |
 | `4404` | No route matches that path |
+| `4429` | Too fast: rate limit, or too many simultaneous connections |
 | `1013` | The client isn't consuming: outbox full, evicted from the group |
 | `1011` | Uncaught exception in the handler (it's in the log) |
 | HTTP 403 | Origin not allowed — the handshake never completes |
@@ -932,7 +1127,7 @@ pip install -e ".[dev]"
 ### Tests
 
 ```bash
-pytest                              # 207 tests, ~7 s, nothing to start
+pytest                              # 261 tests, ~10 s, nothing to start
 node --test tests/js/*.test.js      # 35 tests for the JS client, no npm install
 ```
 

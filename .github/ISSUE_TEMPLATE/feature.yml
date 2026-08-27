@@ -1,0 +1,14 @@
+name: Idea
+description: Something the library should do and doesn't
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to build, and where does it get awkward?
+      description: The concrete problem, not the solution you have in mind.
+    validations: {required: true}
+  - type: textarea
+    id: workaround
+    attributes:
+      label: How are you working around it today?

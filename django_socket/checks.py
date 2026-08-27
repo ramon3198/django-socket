@@ -20,6 +20,11 @@ KNOWN_KEYS = {
     "PATCH_ASGI",
     "SEND_QUEUE_MAX",
     "SEND_QUEUE_FULL",
+    "AUTH",
+    "TOKEN_RESOLVER",
+    "MIDDLEWARE",
+    "RATE_LIMIT",
+    "RATE_LIMIT_BURST",
 }
 
 
@@ -73,3 +78,37 @@ def check_routes(app_configs, **kwargs):
             id=W002,
         )
     ]
+
+
+W004 = "django_socket.W004"  # token por query sin resolver configurado
+
+
+@register()
+def check_auth(app_configs, **kwargs):
+    """Avisa de la combinacion que deja a todo el mundo anonimo en silencio."""
+    from django.conf import settings
+
+    conf = getattr(settings, "DJANGO_SOCKET", {}) or {}
+    autenticadores = conf.get("AUTH", ["session"])
+    usa_token = any(
+        a == "token" or getattr(a, "__name__", "") == "token" for a in autenticadores
+    )
+    if usa_token and not conf.get("TOKEN_RESOLVER"):
+        from django.apps import apps
+
+        if not apps.is_installed("rest_framework.authtoken"):
+            return [
+                Warning(
+                    "DJANGO_SOCKET['AUTH'] incluye 'token' pero no hay "
+                    "TOKEN_RESOLVER.",
+                    hint=(
+                        "La libreria transporta el token pero no sabe validarlo. "
+                        "Define TOKEN_RESOLVER con una funcion "
+                        "async(token) -> user | None, o instala "
+                        "rest_framework.authtoken. Sin eso, todo el mundo "
+                        "entra como anonimo y no es evidente por que."
+                    ),
+                    id=W004,
+                )
+            ]
+    return []

@@ -1,0 +1,37 @@
+name: Bug
+description: Something doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before anything else, please paste the output of `python manage.py ws`.
+        It answers most of what I'd ask you anyway: which routes exist, which
+        layer is running, and how the integration is wired.
+  - type: textarea
+    id: ws
+    attributes:
+      label: Output of `python manage.py ws`
+      render: text
+    validations: {required: true}
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected instead
+    validations: {required: true}
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest handler that reproduces it
+      render: python
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: "django-socket 0.2.0, Django 5.2, Python 3.12, uvicorn 0.34"
+    validations: {required: true}
+  - type: input
+    id: deploy
+    attributes:
+      label: Where it runs
+      placeholder: "runserver / uvicorn behind nginx / gunicorn+uvicorn workers / Docker"
