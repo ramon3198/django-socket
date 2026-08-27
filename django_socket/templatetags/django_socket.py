@@ -1,9 +1,9 @@
-"""Etiqueta para incluir el cliente JS.
+"""Template tag that includes the JS client.
 
     {% load django_socket %}
     {% ws_client %}
 
-Deja disponible `djangoSocket(ruta, opciones)` en la pagina.
+Makes `djangoSocket(path, options)` available on the page.
 """
 
 from django import template
@@ -24,5 +24,5 @@ def ws_client(defer: bool = False):
 
 @register.simple_tag
 def ws_client_url():
-    """Solo la URL, por si la metes en tu propio bundle."""
+    """Just the URL, in case you bundle it yourself."""
     return static("django_socket/client.js")

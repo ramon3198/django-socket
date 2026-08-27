@@ -160,7 +160,7 @@ def test_comando_ws_lista_las_rutas():
     assert "ws:///chat/<str:room>/" in texto
     assert "group=room:{room}" in texto
     assert "auth=False" in texto
-    assert "no hace falta tocarlo" in texto     # estado del parche
+    assert "nothing to do there" in texto       # estado del parche
 
 
 def test_comando_ws_sin_rutas_orienta():
@@ -238,7 +238,8 @@ def test_el_js_va_dentro_del_paquete():
     assert js.is_file()
     fuente = js.read_text(encoding="utf-8")
     assert "global.djangoSocket" in fuente
-    assert "esDefinitivo" in fuente         # la logica de no-reintentar
+    assert "isFinal" in fuente              # la logica de no-reintentar
+    assert "esDefinitivo" in fuente         # alias de 0.2.x, sigue vivo
 
 
 def test_la_version_esta_declarada_una_sola_vez():
@@ -263,3 +264,24 @@ def test_la_version_esta_declarada_una_sola_vez():
         assert 'dynamic = ["version"]' in texto, (
             "pyproject volvio a declarar la version a mano; pueden divergir"
         )
+
+
+# ------------------------------------------------- compatibilidad con 0.2.x
+
+
+def test_los_nombres_de_0_2_x_siguen_funcionando():
+    """
+    0.3.0 pasa la API a ingles. Lo que 0.2.x publico y documento sigue
+    importable para que nadie se quede tirado al actualizar; desaparece en 1.0.
+    """
+    from django_socket import extract_token, extraer_token
+    from django_socket.middleware import (
+        log_connections,
+        max_conexiones_por_usuario,
+        max_connections_per_user,
+        registrar,
+    )
+
+    assert extraer_token is extract_token
+    assert max_conexiones_por_usuario is max_connections_per_user
+    assert registrar is log_connections

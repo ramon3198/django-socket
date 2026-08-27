@@ -1,19 +1,19 @@
-"""Cliente de pruebas: testea tus handlers sin levantar ningun servidor.
+"""Test client: exercise your handlers without starting a server.
 
     from django_socket.testing import WebSocketClient
 
-    async def test_el_chat_reparte():
+    async def test_chat_fans_out():
         async with WebSocketClient("/chat/general/") as a, \\
                    WebSocketClient("/chat/general/") as b:
-            await b.send_json({"type": "mensaje", "texto": "hola"})
-            assert (await a.receive_json())["texto"] == "hola"
+            await b.send_json({"type": "message", "text": "hi"})
+            assert (await a.receive_json())["text"] == "hi"
 
-Habla el protocolo ASGI directamente contra el dispatcher, asi que pasa por el
-mismo camino que una conexion real -- ruta, conversores, validacion de origen,
-sesion, grupos -- pero sin sockets, sin puertos y en milisegundos.
+It speaks ASGI straight to the dispatcher, so it goes through the same path a
+real connection does -- route, converters, origin validation, session, groups --
+but with no sockets, no ports and in milliseconds.
 
-Todos los `receive` llevan timeout: un test que espera algo que no llega falla
-en un segundo en vez de colgarse.
+Every `receive` has a timeout: a test waiting for something that never arrives
+fails in one second instead of hanging.
 """
 
 from __future__ import annotations
@@ -26,23 +26,23 @@ from .websocket import InvalidJSON, Message, WebSocketDisconnect
 TIMEOUT = 1.0
 
 
-class TimeoutDelEsperado(AssertionError):
-    """No llego nada en el plazo.
+class ReceiveTimeout(AssertionError):
+    """Nothing arrived within the deadline.
 
-    Es AssertionError para que lea como un fallo de test, no como un error.
+    An AssertionError so it reads as a failing test, not as an error.
     """
 
 
 class WebSocketClient:
     """
-    Un cliente websocket de mentira contra el dispatcher de verdad.
+    A fake websocket client against the real dispatcher.
 
-    `path`         la ruta, tal cual la escribiria un navegador ("/chat/x/")
-    `user`         un User: se le crea sesion y `sock.user` lo vera autenticado
-    `headers`      cabeceras extra (`origin` ya va puesto)
-    `cookies`      dict de cookies; se combina con la sesion de `user`
+    `path`         the path, exactly as a browser would write it ("/chat/x/")
+    `user`         a User: a session is created and `sock.user` sees it logged in
+    `headers`      extra headers (`origin` is already set)
+    `cookies`      dict of cookies; merged with the session from `user`
     `query`        "token=abc&n=3"
-    `subprotocols` los que ofreceria el navegador
+    `subprotocols` the ones a browser would offer
     """
 
     def __init__(
@@ -65,10 +65,10 @@ class WebSocketClient:
         if origin is not None:
             self._headers.setdefault("origin", origin)
 
-        self._al_servidor: asyncio.Queue = asyncio.Queue()
-        self._al_cliente: asyncio.Queue = asyncio.Queue()
-        self._buffer: list[dict] = []      # lo que ya sacamos de la cola
-        self._tarea: asyncio.Task | None = None
+        self._to_server: asyncio.Queue = asyncio.Queue()
+        self._to_client: asyncio.Queue = asyncio.Queue()
+        self._buffer: list[dict] = []      # what we already pulled off the queue
+        self._task: asyncio.Task | None = None
 
         self.accepted = False
         self.subprotocol: str | None = None
@@ -78,27 +78,29 @@ class WebSocketClient:
     @property
     def connected(self) -> bool:
         """
-        Si tienes una conexion usable.
+        Whether you have a usable connection.
 
-        Distinto de `accepted`, que dice literalmente si el servidor mando un
-        `websocket.accept`. Un rechazo con codigo (4404, 4401...) se ve en el
-        protocolo como accept + close, porque cerrar sin aceptar dejaria al
-        navegador con un 1006 sin motivo. Para "¿me dejo entrar?" usa este.
+        Different from `accepted`, which says literally whether the server sent
+        a `websocket.accept`. A coded rejection (4404, 4401...) looks like
+        accept + close on the wire, because closing without accepting would
+        leave the browser with a reasonless 1006. For "did it let me in?" use
+        this one.
         """
         return self.accepted and self.close_code is None
 
-    # ------------------------------------------------------------ ciclo de vida
+    # ------------------------------------------------------------- life cycle
 
     async def connect(self, timeout: float = TIMEOUT) -> "WebSocketClient":
         """
-        Abre la conexion y espera la respuesta al handshake.
+        Open the connection and wait for the handshake response.
 
-        No lanza si el servidor rechaza: mira `connected` y `close_code`, que
-        es lo que quieres afirmar cuando pruebas un rechazo.
+        It does not raise when the server rejects: look at `connected` and
+        `close_code`, which is what you want to assert when testing a
+        rejection.
         """
         if self.user is not None:
             self._cookies.setdefault(
-                await _nombre_cookie_sesion(), await _crear_sesion(self.user)
+                await _session_cookie_name(), await _make_session(self.user)
             )
         if self._cookies:
             self._headers["cookie"] = "; ".join(
@@ -107,47 +109,47 @@ class WebSocketClient:
 
         from . import dispatch
 
-        self._al_servidor.put_nowait({"type": "websocket.connect"})
-        self._tarea = asyncio.create_task(
-            dispatch.handle_websocket(self._scope(), self._recibir, self._enviar)
+        self._to_server.put_nowait({"type": "websocket.connect"})
+        self._task = asyncio.create_task(
+            dispatch.handle_websocket(self._scope(), self._receive, self._send)
         )
 
-        evento = await self._siguiente(timeout, que="la respuesta al handshake")
-        if evento["type"] == "websocket.accept":
+        event = await self._next_event(timeout, what="handshake response")
+        if event["type"] == "websocket.accept":
             self.accepted = True
-            self.subprotocol = evento.get("subprotocol")
-            await self._mirar_si_cierra_enseguida()
+            self.subprotocol = event.get("subprotocol")
+            await self._check_immediate_close()
         else:
-            self._anotar_cierre(evento)
+            self._record_close(event)
         return self
 
-    async def _mirar_si_cierra_enseguida(self) -> None:
+    async def _check_immediate_close(self) -> None:
         """
-        Deja avanzar al handler y anota el cierre si ya viene de camino, para
-        que `connected` diga la verdad nada mas volver de connect().
+        Let the handler make progress and record the close if one is already on
+        its way, so `connected` tells the truth the moment connect() returns.
 
-        Lo que se saca de la cola se guarda en el buffer, asi que `receive()`
-        lo sigue viendo en orden: no se pierde ni un mensaje ni el cierre.
+        Whatever comes off the queue goes into the buffer, so `receive()` still
+        sees it in order: neither a message nor the close is lost.
         """
         for _ in range(3):
             await asyncio.sleep(0)
-        while not self._al_cliente.empty():
-            evento = self._al_cliente.get_nowait()
-            self._buffer.append(evento)
-            if evento["type"] == "websocket.close":
-                self._anotar_cierre(evento)
+        while not self._to_client.empty():
+            event = self._to_client.get_nowait()
+            self._buffer.append(event)
+            if event["type"] == "websocket.close":
+                self._record_close(event)
                 return
 
     async def disconnect(self, code: int = 1000) -> None:
-        """El cliente se va. Espera a que el handler termine su limpieza."""
-        if self._tarea is None or self._tarea.done():
+        """The client leaves. Waits for the handler to finish its cleanup."""
+        if self._task is None or self._task.done():
             return
-        self._al_servidor.put_nowait({"type": "websocket.disconnect", "code": code})
+        self._to_server.put_nowait({"type": "websocket.disconnect", "code": code})
         try:
-            await asyncio.wait_for(asyncio.shield(self._tarea), timeout=TIMEOUT)
+            await asyncio.wait_for(asyncio.shield(self._task), timeout=TIMEOUT)
         except asyncio.TimeoutError:
-            self._tarea.cancel()
-        self._vaciar_cierres()
+            self._task.cancel()
+        self._drain_closes()
 
     async def __aenter__(self) -> "WebSocketClient":
         return await self.connect()
@@ -155,10 +157,10 @@ class WebSocketClient:
     async def __aexit__(self, *exc) -> None:
         await self.disconnect()
 
-    # ------------------------------------------------------------------ enviar
+    # ---------------------------------------------------------------- sending
 
     async def send(self, data: Any) -> None:
-        """str -> texto, bytes -> binario, cualquier otra cosa -> JSON."""
+        """str -> text, bytes -> binary, anything else -> JSON."""
         if isinstance(data, str):
             await self.send_text(data)
         elif isinstance(data, (bytes, bytearray)):
@@ -167,11 +169,11 @@ class WebSocketClient:
             await self.send_json(data)
 
     async def send_text(self, text: str) -> None:
-        self._al_servidor.put_nowait({"type": "websocket.receive", "text": text})
-        await asyncio.sleep(0)      # deja correr al handler
+        self._to_server.put_nowait({"type": "websocket.receive", "text": text})
+        await asyncio.sleep(0)      # let the handler run
 
     async def send_bytes(self, data: bytes) -> None:
-        self._al_servidor.put_nowait({"type": "websocket.receive", "bytes": data})
+        self._to_server.put_nowait({"type": "websocket.receive", "bytes": data})
         await asyncio.sleep(0)
 
     async def send_json(self, data: Any) -> None:
@@ -179,70 +181,70 @@ class WebSocketClient:
 
         await self.send_text(json.dumps(data, default=str))
 
-    # ----------------------------------------------------------------- recibir
+    # -------------------------------------------------------------- receiving
 
     async def receive(self, timeout: float = TIMEOUT) -> Message:
         """
-        El siguiente mensaje. Lanza `WebSocketDisconnect` si el servidor cierra
-        y `TimeoutDelEsperado` si no llega nada.
+        The next message. Raises `WebSocketDisconnect` if the server closes and
+        `ReceiveTimeout` if nothing arrives.
         """
-        evento = await self._siguiente(timeout, que="un mensaje")
-        if evento["type"] == "websocket.close":
-            self._anotar_cierre(evento)
+        event = await self._next_event(timeout, what="message")
+        if event["type"] == "websocket.close":
+            self._record_close(event)
             raise WebSocketDisconnect(self.close_code, self.close_reason)
-        return Message(text=evento.get("text"), data=evento.get("bytes"))
+        return Message(text=event.get("text"), data=event.get("bytes"))
 
     async def receive_text(self, timeout: float = TIMEOUT) -> str:
         msg = await self.receive(timeout)
         if msg.text is None:
-            raise AssertionError("Se esperaba texto y llego un frame binario.")
+            raise AssertionError("Expected text, got a binary frame.")
         return msg.text
 
     async def receive_bytes(self, timeout: float = TIMEOUT) -> bytes:
         msg = await self.receive(timeout)
         if msg.bytes is None:
-            raise AssertionError("Se esperaba binario y llego un frame de texto.")
+            raise AssertionError("Expected binary, got a text frame.")
         return msg.bytes
 
     async def receive_json(self, timeout: float = TIMEOUT) -> Any:
         return (await self.receive(timeout)).json()
 
     async def receive_all(self, timeout: float = 0.1) -> list[Message]:
-        """Todo lo que haya pendiente ahora mismo. Util tras un broadcast."""
-        mensajes = []
+        """Everything pending right now. Handy after a broadcast."""
+        messages = []
         while True:
             try:
-                mensajes.append(await self.receive(timeout))
-            except (TimeoutDelEsperado, WebSocketDisconnect):
-                return mensajes
+                messages.append(await self.receive(timeout))
+            except (ReceiveTimeout, WebSocketDisconnect):
+                return messages
 
     async def receive_nothing(self, timeout: float = 0.1) -> bool:
-        """True si NO llega nada. Para afirmar que un grupo esta aislado."""
+        """True if nothing arrives. For asserting that a group is isolated."""
         try:
-            await self._siguiente(timeout, que="nada")
-        except TimeoutDelEsperado:
+            await self._next_event(timeout, what="anything")
+        except ReceiveTimeout:
             return True
         return False
 
     async def wait_closed(self, timeout: float = TIMEOUT) -> int:
-        """Espera a que el servidor cierre y devuelve el codigo."""
+        """Wait for the server to close and return the code."""
         if self.close_code is not None:
             return self.close_code
         try:
             while True:
-                evento = await self._siguiente(timeout, que="el cierre")
-                if evento["type"] == "websocket.close":
-                    self._anotar_cierre(evento)
+                event = await self._next_event(timeout, what="close")
+                if event["type"] == "websocket.close":
+                    self._record_close(event)
                     return self.close_code
-        except TimeoutDelEsperado:
+        except ReceiveTimeout:
             raise AssertionError(
-                f"El servidor no cerro en {timeout}s (sigue abierto)."
+                f"The server did not close within {timeout}s (still open)."
             ) from None
 
-    # ------------------------------------------------------------------ dentro
+    # --------------------------------------------------------------- internals
 
     def _scope(self) -> dict:
-        cabeceras = [
+        headers = [
             (k.lower().encode("latin-1"), str(v).encode("latin-1"))
             for k, v in self._headers.items()
             if v is not None
@@ -252,60 +254,60 @@ class WebSocketClient:
             "path": self.path,
             "raw_path": self.path.encode(),
             "query_string": self._query.encode(),
-            "headers": cabeceras,
+            "headers": headers,
             "subprotocols": self._subprotocols,
             "client": ("127.0.0.1", 54321),
             "server": ("testserver", 80),
             "scheme": "ws",
         }
 
-    async def _recibir(self) -> dict:
-        return await self._al_servidor.get()
+    async def _receive(self) -> dict:
+        return await self._to_server.get()
 
-    async def _enviar(self, message: dict) -> None:
-        await self._al_cliente.put(message)
+    async def _send(self, message: dict) -> None:
+        await self._to_client.put(message)
 
-    async def _siguiente(self, timeout: float, que: str) -> dict:
+    async def _next_event(self, timeout: float, what: str) -> dict:
         if self._buffer:
             return self._buffer.pop(0)
         try:
-            return await asyncio.wait_for(self._al_cliente.get(), timeout=timeout)
+            return await asyncio.wait_for(self._to_client.get(), timeout=timeout)
         except asyncio.TimeoutError:
-            self._reventar_si_el_handler_murio()
-            raise TimeoutDelEsperado(
-                f"No llego {que} de {self.path} en {timeout}s."
+            self._raise_if_handler_died()
+            raise ReceiveTimeout(
+                f"No {what} arrived from {self.path} within {timeout}s."
             ) from None
 
-    def _reventar_si_el_handler_murio(self) -> None:
-        """Si el handler murio de verdad, ese error es mas util que el timeout."""
-        if self._tarea is not None and self._tarea.done():
-            exc = self._tarea.exception()
+    def _raise_if_handler_died(self) -> None:
+        """If the handler really died, that error is more useful than a timeout."""
+        if self._task is not None and self._task.done():
+            exc = self._task.exception()
             if exc is not None:
                 raise exc
 
-    def _anotar_cierre(self, evento: dict) -> None:
-        self.close_code = evento.get("code", 1000)
-        self.close_reason = evento.get("reason", "")
+    def _record_close(self, event: dict) -> None:
+        self.close_code = event.get("code", 1000)
+        self.close_reason = event.get("reason", "")
 
-    def _vaciar_cierres(self) -> None:
-        while not self._al_cliente.empty():
-            self._buffer.append(self._al_cliente.get_nowait())
-        for evento in self._buffer:
-            if evento["type"] == "websocket.close":
-                self._anotar_cierre(evento)
-
-
-# --------------------------------------------------------------------- sesion
+    def _drain_closes(self) -> None:
+        while not self._to_client.empty():
+            self._buffer.append(self._to_client.get_nowait())
+        for event in self._buffer:
+            if event["type"] == "websocket.close":
+                self._record_close(event)
 
 
-async def _nombre_cookie_sesion() -> str:
+# -------------------------------------------------------------------- session
+
+
+async def _session_cookie_name() -> str:
     from django.conf import settings
 
     return settings.SESSION_COOKIE_NAME
 
 
-async def _crear_sesion(user) -> str:
-    """Deja una sesion autenticada en la BD, como haria un login de verdad."""
+async def _make_session(user) -> str:
+    """Leave an authenticated session in the DB, like a real login would."""
     from importlib import import_module
 
     from django.conf import settings
@@ -316,23 +318,23 @@ async def _crear_sesion(user) -> str:
     )
 
     engine = import_module(settings.SESSION_ENGINE)
-    sesion = engine.SessionStore()
-    sesion[SESSION_KEY] = str(user.pk)
-    sesion[BACKEND_SESSION_KEY] = settings.AUTHENTICATION_BACKENDS[0]
-    sesion[HASH_SESSION_KEY] = user.get_session_auth_hash()
+    session = engine.SessionStore()
+    session[SESSION_KEY] = str(user.pk)
+    session[BACKEND_SESSION_KEY] = settings.AUTHENTICATION_BACKENDS[0]
+    session[HASH_SESSION_KEY] = user.get_session_auth_hash()
 
-    if hasattr(sesion, "acreate"):
-        await sesion.acreate()
+    if hasattr(session, "acreate"):
+        await session.acreate()
     else:  # pragma: no cover - Django < 5.0
         from asgiref.sync import sync_to_async
 
-        await sync_to_async(sesion.create)()
-    return sesion.session_key
+        await sync_to_async(session.create)()
+    return session.session_key
 
 
 __all__ = [
     "InvalidJSON",
-    "TimeoutDelEsperado",
+    "ReceiveTimeout",
     "WebSocketClient",
     "WebSocketDisconnect",
 ]

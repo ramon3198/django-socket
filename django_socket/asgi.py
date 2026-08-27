@@ -1,11 +1,11 @@
-"""Punto de entrada ASGI explicito.
+"""Explicit ASGI entry point.
 
-Normalmente **no necesitas nada de aqui**: basta con añadir "django_socket" a
-INSTALLED_APPS y el `asgi.py` que genero `startproject` sirve WebSockets tal
-cual (ver `patch.py`).
+You normally **need nothing from here**: adding "django_socket" to
+INSTALLED_APPS is enough, and the `asgi.py` that `startproject` generated
+serves WebSockets as-is (see `patch.py`).
 
-`ASGIApplication` existe para quien prefiere declararlo a mano, para componer
-con otro middleware ASGI, o para quien puso PATCH_ASGI=False.
+`ASGIApplication` exists for anyone who would rather declare it by hand, to
+compose with other ASGI middleware, or for anyone who set PATCH_ASGI=False.
 """
 
 from __future__ import annotations
@@ -15,20 +15,20 @@ from . import dispatch
 
 class ASGIApplication:
     """
-    Uso explicito en tu `asgi.py`:
+    Explicit use in your `asgi.py`:
 
         from django_socket import ASGIApplication
         application = ASGIApplication()
 
-    El trafico HTTP va a Django sin tocarse; solo se intercepta el scope
-    'websocket' (y 'lifespan', para arrancar y parar la capa de difusion).
+    HTTP traffic goes to Django untouched; only the 'websocket' scope is
+    intercepted (and 'lifespan', to start and stop the fan-out layer).
     """
 
     def __init__(self, http_app=None):
         if http_app is None:
             from django.core.asgi import get_asgi_application
 
-            http_app = _wrap_static(get_asgi_application())  # hace django.setup()
+            http_app = _wrap_static(get_asgi_application())  # runs django.setup()
         self.http_app = http_app
 
     async def __call__(self, scope, receive, send):
@@ -42,16 +42,16 @@ class ASGIApplication:
 
 def factory():
     """
-    App ASGI construida al vuelo, sin que el proyecto declare nada.
+    An ASGI app built on the fly, with nothing declared by the project.
 
-    La usa `runserver` cuando no hay ASGI_APPLICATION en settings, para que la
-    libreria funcione recien instalada.
+    `runserver` uses it when there is no ASGI_APPLICATION in settings, so the
+    library works straight after installing.
     """
     return ASGIApplication()
 
 
 def _wrap_static(app):
-    """En DEBUG sirve /static/ igual que hace `runserver`, sin tocar websockets."""
+    """In DEBUG serve /static/ like `runserver` does, without touching sockets."""
     from django.apps import apps
     from django.conf import settings
 

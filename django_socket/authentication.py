@@ -1,26 +1,26 @@
-"""Autenticacion conectable.
+"""Pluggable authentication.
 
-Un autenticador es `async def (sock) -> user | None`. Se prueban en orden y
-gana el primero que devuelva algo:
+An authenticator is `async def (sock) -> user | None`. They are tried in order
+and the first one that returns something wins:
 
     DJANGO_SOCKET = {
         "AUTH": ["session", "token"],
-        "TOKEN_RESOLVER": "miapp.auth.desde_jwt",
+        "TOKEN_RESOLVER": "myapp.auth.from_jwt",
     }
 
-o por ruta, cuando solo un endpoint lo necesita:
+or per route, when only one endpoint needs it:
 
     @ws("feed/", auth="token")
     @ws("panel/", auth=["session", "token"])
-    @ws("publico/", auth=False)          # ni lo intentes
+    @ws("public/", auth=False)          # don't even try
 
-Escribir el tuyo es una funcion:
+Writing your own is just a function:
 
-    async def por_api_key(sock):
-        clave = sock.query_params.get("k")
-        return await Cliente.objects.filter(api_key=clave).afirst()
+    async def by_api_key(sock):
+        key = sock.query_params.get("k")
+        return await Client.objects.filter(api_key=key).afirst()
 
-    DJANGO_SOCKET = {"AUTH": ["miapp.auth.por_api_key"]}
+    DJANGO_SOCKET = {"AUTH": ["myapp.auth.by_api_key"]}
 """
 
 from __future__ import annotations
@@ -30,15 +30,15 @@ from typing import Any, Callable
 
 logger = logging.getLogger("django_socket")
 
-# Como llega el token, en orden de preferencia.
-ESQUEMA = "bearer"
+# How the token arrives, in order of preference.
+SCHEME = "bearer"
 
 
-# --------------------------------------------------------------------- sesion
+# ------------------------------------------------------------------- session
 
 
 class _SessionCarrier:
-    """Lo minimo que `django.contrib.auth.aget_user` espera de un request."""
+    """The minimum `django.contrib.auth.aget_user` expects from a request."""
 
     __slots__ = ("session",)
 
@@ -48,11 +48,11 @@ class _SessionCarrier:
 
 async def session(sock) -> Any | None:
     """
-    La cookie de sesion de Django. Es el modo por defecto.
+    Django's session cookie. This is the default.
 
-    Solo funciona si el navegador manda la cookie, o sea con el frontend
-    servido desde el mismo sitio. Para un SPA en otro dominio o una app movil
-    no hay cookie: usa `token`.
+    It only works when the browser sends the cookie, which means a same-site
+    frontend. A SPA on another domain or a mobile app has no cookie: use
+    `token`.
     """
     from importlib import import_module
 
@@ -66,8 +66,8 @@ async def session(sock) -> Any | None:
         return None
 
     engine = import_module(settings.SESSION_ENGINE)
-    clave = sock.cookies.get(settings.SESSION_COOKIE_NAME)
-    sock.session = engine.SessionStore(clave)
+    key = sock.cookies.get(settings.SESSION_COOKIE_NAME)
+    sock.session = engine.SessionStore(key)
 
     try:
         from django.contrib.auth import aget_user
@@ -82,149 +82,148 @@ async def session(sock) -> Any | None:
     return user if getattr(user, "is_authenticated", False) else None
 
 
-# ---------------------------------------------------------------------- token
+# --------------------------------------------------------------------- token
 
 
-def extraer_token(sock) -> str | None:
+def extract_token(sock) -> str | None:
     """
-    Saca el token de donde el cliente haya podido ponerlo.
+    Pull the token from wherever the client was able to put it.
 
-    Hay tres sitios porque **el navegador no puede fijar cabeceras** en un
-    WebSocket: la API `new WebSocket(url, protocols)` solo deja tocar la URL y
-    `Sec-WebSocket-Protocol`. Asi que:
+    There are three places because **a browser cannot set headers** on a
+    WebSocket: the `new WebSocket(url, protocols)` API only lets you touch the
+    URL and `Sec-WebSocket-Protocol`. So:
 
-    1. `Sec-WebSocket-Protocol: bearer, <token>` -- la via recomendada para
-       navegadores. No se ve en la URL, luego no acaba en los logs.
-    2. `Authorization: Bearer <token>` -- para clientes nativos, que si pueden
-       poner cabeceras.
-    3. `?token=<token>` -- funciona en todas partes, pero **queda escrito en
-       los logs de acceso del servidor y de cualquier proxy por el que pase**.
-       Usalo solo con tokens de un solo uso y vida corta.
+    1. `Sec-WebSocket-Protocol: bearer, <token>` -- the recommended route for
+       browsers. Not in the URL, so it never reaches your access logs.
+    2. `Authorization: Bearer <token>` -- for native clients, which can set
+       headers.
+    3. `?token=<token>` -- works everywhere, but **ends up written in the
+       access logs of your server and of every proxy in between**. Use it only
+       with short-lived, single-use tokens.
     """
-    protocolos = [p.strip() for p in sock.subprotocols]
-    if len(protocolos) >= 2 and protocolos[0].lower() == ESQUEMA:
-        return protocolos[1]
+    protos = [p.strip() for p in sock.subprotocols]
+    if len(protos) >= 2 and protos[0].lower() == SCHEME:
+        return protos[1]
 
-    cabecera = sock.headers.get("authorization", "")
-    if cabecera.lower().startswith(ESQUEMA + " "):
-        return cabecera[len(ESQUEMA) + 1:].strip()
+    header = sock.headers.get("authorization", "")
+    if header.lower().startswith(SCHEME + " "):
+        return header[len(SCHEME) + 1:].strip()
 
     return sock.query_params.get("token")
 
 
 async def token(sock) -> Any | None:
     """
-    Un token, resuelto por la funcion que tu indiques.
+    A token, validated by the function you point us at.
 
-    La libreria no sabe validar tu token -- puede ser un JWT, el de DRF, o algo
-    tuyo -- asi que solo hace el transporte y te delega la parte que importa:
+    The library cannot validate your token -- it might be a JWT, DRF's, or
+    something of your own -- so it only handles the transport and delegates the
+    part that matters:
 
-        DJANGO_SOCKET = {"TOKEN_RESOLVER": "miapp.auth.desde_jwt"}
+        DJANGO_SOCKET = {"TOKEN_RESOLVER": "myapp.auth.from_jwt"}
 
-        async def desde_jwt(token):
-            datos = jwt.decode(token, KEY, algorithms=["HS256"])
-            return await User.objects.filter(pk=datos["sub"]).afirst()
+        async def from_jwt(token):
+            data = jwt.decode(token, KEY, algorithms=["HS256"])
+            return await User.objects.filter(pk=data["sub"]).afirst()
 
-    Si no configuras `TOKEN_RESOLVER` y tienes `rest_framework.authtoken`
-    instalado, se usa ese como atajo razonable.
+    If you set no `TOKEN_RESOLVER` and have `rest_framework.authtoken`
+    installed, that one is used as a reasonable shortcut.
     """
-    crudo = extraer_token(sock)
-    if not crudo:
+    raw = extract_token(sock)
+    if not raw:
         return None
 
     resolver = _get_token_resolver()
     if resolver is None:
         logger.warning(
-            "django_socket: llego un token pero no hay quien lo valide. "
-            "Define DJANGO_SOCKET['TOKEN_RESOLVER'] con una funcion "
-            "async(token) -> user | None."
+            "django_socket: a token arrived but nothing validates it. "
+            "Set DJANGO_SOCKET['TOKEN_RESOLVER'] to an "
+            "async(token) -> user | None function."
         )
         return None
 
     try:
-        return await resolver(crudo)
+        return await resolver(raw)
     except Exception:
-        # Un token invalido es lo normal, no un incidente: no ensucies el log
-        # con una traza por cada intento.
-        logger.debug("django_socket: el resolver rechazo el token", exc_info=True)
+        # An invalid token is normal, not an incident: don't fill the log with
+        # a traceback on every attempt.
+        logger.debug("django_socket: the resolver rejected the token", exc_info=True)
         return None
 
 
 _resolver_cache: Callable | None = None
-_resolver_resuelto = False
+_resolver_resolved = False
 
 
 def _get_token_resolver() -> Callable | None:
-    global _resolver_cache, _resolver_resuelto
-    if _resolver_resuelto:
+    global _resolver_cache, _resolver_resolved
+    if _resolver_resolved:
         return _resolver_cache
 
     from django.conf import settings
     from django.utils.module_loading import import_string
 
     conf = getattr(settings, "DJANGO_SOCKET", {}) or {}
-    ruta = conf.get("TOKEN_RESOLVER")
+    path = conf.get("TOKEN_RESOLVER")
 
-    if ruta:
-        _resolver_cache = import_string(ruta) if isinstance(ruta, str) else ruta
+    if path:
+        _resolver_cache = import_string(path) if isinstance(path, str) else path
     else:
-        _resolver_cache = _resolver_drf()
+        _resolver_cache = _drf_resolver()
 
-    _resolver_resuelto = True
+    _resolver_resolved = True
     return _resolver_cache
 
 
-def _resolver_drf() -> Callable | None:
-    """Atajo para quien ya use `rest_framework.authtoken`."""
+def _drf_resolver() -> Callable | None:
+    """A shortcut for anyone already using `rest_framework.authtoken`."""
     from django.apps import apps
 
     if not apps.is_installed("rest_framework.authtoken"):
         return None
 
-    async def desde_drf(crudo):
+    async def from_drf(raw):
         from rest_framework.authtoken.models import Token as DRFToken
 
-        fila = await DRFToken.objects.select_related("user").filter(
-            key=crudo
-        ).afirst()
-        return fila.user if fila else None
+        row = await DRFToken.objects.select_related("user").filter(key=raw).afirst()
+        return row.user if row else None
 
-    return desde_drf
+    return from_drf
 
 
-# ------------------------------------------------------------------ registro
+# ------------------------------------------------------------------ registry
 
-INCORPORADOS: dict[str, Callable] = {"session": session, "token": token}
+BUILTIN: dict[str, Callable] = {"session": session, "token": token}
 
 
-def resolver_lista(spec) -> list[Callable]:
-    """Normaliza lo que venga en `auth=` o en settings a una lista de funciones."""
+def resolve_authenticators(spec) -> list[Callable]:
+    """Normalize whatever `auth=` or settings hold into a list of functions."""
     from django.utils.module_loading import import_string
 
     if spec is True or spec is None:
-        spec = _por_defecto()
+        spec = _default_spec()
     if isinstance(spec, (str, bytes)) or callable(spec):
         spec = [spec]
 
-    salida = []
+    out = []
     for item in spec:
         if callable(item):
-            salida.append(item)
-        elif item in INCORPORADOS:
-            salida.append(INCORPORADOS[item])
+            out.append(item)
+        elif item in BUILTIN:
+            out.append(BUILTIN[item])
         else:
             try:
-                salida.append(import_string(item))
+                out.append(import_string(item))
             except ImportError as exc:
                 raise ValueError(
-                    f"Autenticador desconocido: {item!r}. Usa "
-                    f"{sorted(INCORPORADOS)}, una ruta importable, o una "
-                    f"funcion async(sock) -> user | None."
+                    f"Unknown authenticator: {item!r}. Use one of "
+                    f"{sorted(BUILTIN)}, an importable path, or an "
+                    f"async(sock) -> user | None function."
                 ) from exc
-    return salida
+    return out
 
 
-def _por_defecto():
+def _default_spec():
     from django.conf import settings
 
     conf = getattr(settings, "DJANGO_SOCKET", {}) or {}
@@ -232,16 +231,16 @@ def _por_defecto():
 
 
 async def resolve(sock, spec=True) -> None:
-    """Rellena `sock.user` con el primer autenticador que reconozca a alguien."""
+    """Fill `sock.user` with the first authenticator that recognises anyone."""
     from django.contrib.auth.models import AnonymousUser
 
-    for autenticador in resolver_lista(spec):
+    for authenticator in resolve_authenticators(spec):
         try:
-            user = await autenticador(sock)
+            user = await authenticator(sock)
         except Exception:
             logger.exception(
-                "django_socket: el autenticador %s fallo",
-                getattr(autenticador, "__name__", autenticador),
+                "django_socket: authenticator %s failed",
+                getattr(authenticator, "__name__", authenticator),
             )
             continue
         if user is not None:
@@ -251,15 +250,15 @@ async def resolve(sock, spec=True) -> None:
     sock.user = AnonymousUser()
 
 
-def _limpiar_cache_resolver() -> None:
-    """Solo para tests: obliga a releer TOKEN_RESOLVER de settings."""
-    global _resolver_cache, _resolver_resuelto
-    _resolver_cache, _resolver_resuelto = None, False
+def _clear_resolver_cache() -> None:
+    """Tests only: force TOKEN_RESOLVER to be read from settings again."""
+    global _resolver_cache, _resolver_resolved
+    _resolver_cache, _resolver_resolved = None, False
 
 
 def login_required(handler):
     """
-    Cierra la conexion con 4401 si el usuario no esta autenticado.
+    Close the connection with 4401 when the user is not authenticated.
 
         @ws("panel/")
         @login_required
@@ -276,3 +275,9 @@ def login_required(handler):
         return await handler(sock, *args, **kwargs)
 
     return wrapper
+
+
+# --------------------------------------------------------- 0.2.x compatibility
+# `extraer_token` was exported from `django_socket` in 0.2.x. Kept so upgrading
+# does not break anyone; removed at 1.0.
+extraer_token = extract_token

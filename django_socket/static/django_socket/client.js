@@ -1,65 +1,65 @@
 /*!
- * django_socket - cliente con reconexion automatica.
+ * django_socket - WebSocket client with automatic reconnection.
  *
  *   const sock = djangoSocket("/chat/general/");
- *   sock.on("mensaje", (datos) => pintar(datos.texto));
- *   sock.send({type: "mensaje", texto: "hola"});
+ *   sock.on("message", (data) => render(data.text));
+ *   sock.send({type: "message", text: "hi"});
  *
- * Lo que aporta frente a `new WebSocket(...)` a pelo:
- *   - reconecta con backoff exponencial y jitter
- *   - NO reconecta cuando el servidor cierra a proposito (4401 falta login,
- *     4404 ruta inexistente...): ahi reintentar es un bucle infinito
- *   - encola lo que envies mientras esta caido y lo suelta al volver
- *   - JSON en los dos sentidos, y enrutado por `type` como el Events de Python
- *   - deja de reintentar si el navegador esta sin red (y opcionalmente
- *     si la pestaña esta oculta: {pauseWhenHidden: true})
+ * What it adds over a bare `new WebSocket(...)`:
+ *   - reconnects with exponential backoff and jitter
+ *   - does NOT reconnect when the server closed on purpose (4401 login
+ *     required, 4404 no such route...): retrying there is an infinite loop
+ *   - queues what you send while it is down and flushes it on return
+ *   - JSON both ways, routed by `type` like the Events class in Python
+ *   - stops retrying while the browser is offline (and optionally while the
+ *     tab is hidden: {pauseWhenHidden: true})
  */
 (function (global) {
   "use strict";
 
-  // Cierres que significan "no lo vuelvas a intentar".
-  //   1000 el servidor cerro limpiamente        1008 violacion de politica
-  //   4000-4999 decisiones de tu aplicacion (login, ruta, datos invalidos)
-  function esDefinitivo(code) {
+  // Closes that mean "do not try again".
+  //   1000 the server closed cleanly            1008 policy violation
+  //   4000-4999 decisions of your own app (login, route, invalid data)
+  function isFinal(code) {
     return code === 1000 || code === 1008 || (code >= 4000 && code <= 4999);
   }
 
-  function urlAbsoluta(ruta) {
-    if (/^wss?:\/\//.test(ruta)) return ruta;
+  function absoluteUrl(path) {
+    if (/^wss?:\/\//.test(path)) return path;
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
-    return proto + "//" + location.host + (ruta[0] === "/" ? ruta : "/" + ruta);
+    return proto + "//" + location.host + (path[0] === "/" ? path : "/" + path);
   }
 
-  function djangoSocket(ruta, opciones) {
+  function djangoSocket(path, options) {
     var o = Object.assign(
       {
-        key: "type",             // el campo que enruta, igual que Events(key=)
+        key: "type",             // the field that routes, same as Events(key=)
         reconnect: true,
-        minDelay: 500,           // primer reintento, en ms
-        maxDelay: 15000,         // tope del backoff
+        minDelay: 500,           // first retry, in ms
+        maxDelay: 15000,         // backoff ceiling
         maxRetries: Infinity,
-        queue: true,             // guardar los envios mientras no hay conexion
+        queue: true,             // hold sends while there is no connection
         maxQueue: 100,
-        pauseWhenHidden: false,  // ver la nota en esperarAEstarListo()
+        pauseWhenHidden: false,  // see the note in waitUntilReady()
         protocols: undefined,
-        onOpen: null,            // (esReconexion) => {}
-        onMessage: null,         // (datos, evento) => {}  para lo que no case
-        onClose: null,           // (evento, vaAReintentar) => {}
+        onOpen: null,            // (isReconnection) => {}
+        onMessage: null,         // (data, event) => {}  for whatever did not match
+        onClose: null,           // (event, willRetry) => {}
         onError: null,
-        onRetry: null,           // (intento, esperaMs) => {}
-        shouldReconnect: null,   // (evento) => bool   para decidirlo tu
+        onRetry: null,           // (attempt, delayMs) => {}
+        shouldReconnect: null,   // (event) => bool   to decide it yourself
       },
-      opciones || {}
+      options || {}
     );
 
-    var url = urlAbsoluta(ruta);
+    var url = absoluteUrl(path);
     var ws = null;
     var handlers = {};
-    var pendientes = [];
-    var intentos = 0;
-    var temporizador = null;
-    var cerradoPorNosotros = false;
-    var haAbiertoAlgunaVez = false;
+    var queued = [];
+    var attempts = 0;
+    var timer = null;
+    var closedByUs = false;
+    var hasEverOpened = false;
 
     var api = {
       get readyState() {
@@ -72,206 +72,208 @@
         return url;
       },
       get pending() {
-        return pendientes.length;
+        return queued.length;
       },
       on: on,
       off: off,
       send: send,
       close: close,
-      reconnect: forzarReconexion,
+      reconnect: forceReconnect,
     };
 
     // ------------------------------------------------------------- handlers
 
-    function on(tipo, fn) {
-      (handlers[tipo] = handlers[tipo] || []).push(fn);
-      return api;                       // encadenable: .on(..).on(..)
+    function on(type, fn) {
+      (handlers[type] = handlers[type] || []).push(fn);
+      return api;                       // chainable: .on(..).on(..)
     }
 
-    function off(tipo, fn) {
-      if (!handlers[tipo]) return api;
-      if (!fn) delete handlers[tipo];
-      else handlers[tipo] = handlers[tipo].filter(function (f) { return f !== fn; });
+    function off(type, fn) {
+      if (!handlers[type]) return api;
+      if (!fn) delete handlers[type];
+      else handlers[type] = handlers[type].filter(function (f) { return f !== fn; });
       return api;
     }
 
-    function despachar(datos, evento) {
-      var tipo = datos && typeof datos === "object" ? datos[o.key] : undefined;
-      // "*" es un respaldo, no un espia: solo corre cuando nadie mas cogio el
-      // mensaje. Es la misma semantica que el Events de Python, y tenerlas
-      // distintas a cada lado del mismo protocolo es pedir un bug.
-      var lista = handlers[tipo] && handlers[tipo].length
-        ? handlers[tipo]
+    function dispatch(data, event) {
+      var type = data && typeof data === "object" ? data[o.key] : undefined;
+      // "*" is a fallback, not a spy: it only runs when nobody else took the
+      // message. That is the same semantics as the Events class in Python, and
+      // having them differ on each side of the same protocol invites a bug.
+      var list = handlers[type] && handlers[type].length
+        ? handlers[type]
         : handlers["*"] || [];
-      if (lista.length) {
-        lista.slice().forEach(function (fn) { fn(datos, evento); });
+      if (list.length) {
+        list.slice().forEach(function (fn) { fn(data, event); });
       } else if (o.onMessage) {
-        o.onMessage(datos, evento);
+        o.onMessage(data, event);
       }
     }
 
-    // --------------------------------------------------------------- enviar
+    // ----------------------------------------------------------------- send
 
-    function send(datos) {
-      var cuerpo =
-        typeof datos === "string" || datos instanceof Blob || datos instanceof ArrayBuffer
-          ? datos
-          : JSON.stringify(datos);
+    function send(data) {
+      var body =
+        typeof data === "string" || data instanceof Blob || data instanceof ArrayBuffer
+          ? data
+          : JSON.stringify(data);
 
       if (api.connected) {
-        ws.send(cuerpo);
+        ws.send(body);
         return true;
       }
       if (o.queue) {
-        if (pendientes.length >= o.maxQueue) pendientes.shift();   // tira el mas viejo
-        pendientes.push(cuerpo);
+        if (queued.length >= o.maxQueue) queued.shift();   // drop the oldest
+        queued.push(body);
       }
       return false;
     }
 
-    function vaciarCola() {
-      var cola = pendientes;
-      pendientes = [];
-      cola.forEach(function (cuerpo) { ws.send(cuerpo); });
+    function flushQueue() {
+      var pending = queued;
+      queued = [];
+      pending.forEach(function (body) { ws.send(body); });
     }
 
-    // ---------------------------------------------------------- ciclo de vida
+    // ----------------------------------------------------------- life cycle
 
-    function conectar() {
-      clearTimeout(temporizador);
-      // Ojo: aqui NO se toca `cerradoPorNosotros`. Resetearlo al conectar
-      // resucitaba sockets que la aplicacion habia cerrado a proposito: si el
-      // cierre ocurria mientras esperabamos al evento "online", al volver la
-      // red el listener llamaba a conectar() y el flag se limpiaba solo.
-      // Quien decide reconectar es forzarReconexion(); ahi si se limpia.
+    function connect() {
+      clearTimeout(timer);
+      // Careful: `closedByUs` is NOT touched here. Resetting it on connect
+      // revived sockets the application had closed on purpose: if the close
+      // happened while we were waiting for the "online" event, the listener
+      // called connect() when the network came back and the flag cleared
+      // itself. forceReconnect() is what decides to reconnect; it clears it.
       try {
         ws = o.protocols ? new WebSocket(url, o.protocols) : new WebSocket(url);
       } catch (err) {
         if (o.onError) o.onError(err);
-        programarReintento({ code: 1006, reason: String(err) });
+        scheduleRetry({ code: 1006, reason: String(err) });
         return;
       }
 
       ws.onopen = function () {
-        var esReconexion = haAbiertoAlgunaVez;
-        haAbiertoAlgunaVez = true;
-        intentos = 0;
-        vaciarCola();
-        if (o.onOpen) o.onOpen(esReconexion);
+        var isReconnection = hasEverOpened;
+        hasEverOpened = true;
+        attempts = 0;
+        flushQueue();
+        if (o.onOpen) o.onOpen(isReconnection);
       };
 
-      ws.onmessage = function (evento) {
-        var datos = evento.data;
-        if (typeof datos === "string") {
+      ws.onmessage = function (event) {
+        var data = event.data;
+        if (typeof data === "string") {
           try {
-            datos = JSON.parse(datos);
+            data = JSON.parse(data);
           } catch (e) {
-            /* no era JSON: se pasa el texto tal cual */
+            /* not JSON: hand the text through as it came */
           }
         }
-        despachar(datos, evento);
+        dispatch(data, event);
       };
 
-      ws.onerror = function (evento) {
-        if (o.onError) o.onError(evento);
+      ws.onerror = function (event) {
+        if (o.onError) o.onError(event);
       };
 
-      ws.onclose = function (evento) {
-        var reintentara = decideReintentar(evento);
-        if (o.onClose) o.onClose(evento, reintentara);
-        if (reintentara) programarReintento(evento);
+      ws.onclose = function (event) {
+        var willRetry = shouldRetry(event);
+        if (o.onClose) o.onClose(event, willRetry);
+        if (willRetry) scheduleRetry(event);
       };
     }
 
-    function decideReintentar(evento) {
-      if (cerradoPorNosotros || !o.reconnect) return false;
-      if (intentos >= o.maxRetries) return false;
-      if (o.shouldReconnect) return !!o.shouldReconnect(evento);
-      return !esDefinitivo(evento.code);
+    function shouldRetry(event) {
+      if (closedByUs || !o.reconnect) return false;
+      if (attempts >= o.maxRetries) return false;
+      if (o.shouldReconnect) return !!o.shouldReconnect(event);
+      return !isFinal(event.code);
     }
 
-    function programarReintento(evento) {
-      // Backoff exponencial con jitter: sin el, N clientes que se caen a la vez
-      // vuelven todos en el mismo instante y tumban el servidor otra vez.
-      var base = Math.min(o.minDelay * Math.pow(2, intentos), o.maxDelay);
-      var espera = Math.round(base * (0.5 + Math.random() * 0.5));
-      intentos += 1;
-      if (o.onRetry) o.onRetry(intentos, espera);
+    function scheduleRetry(event) {
+      // Exponential backoff with jitter: without it, N clients that drop at
+      // once all come back at the same instant and take the server down again.
+      var base = Math.min(o.minDelay * Math.pow(2, attempts), o.maxDelay);
+      var delay = Math.round(base * (0.5 + Math.random() * 0.5));
+      attempts += 1;
+      if (o.onRetry) o.onRetry(attempts, delay);
 
-      temporizador = setTimeout(function () {
-        if (debeEsperar()) {
-          esperarAEstarListo();
+      timer = setTimeout(function () {
+        if (mustWait()) {
+          waitUntilReady();
           return;
         }
-        conectar();
-      }, espera);
+        connect();
+      }, delay);
     }
 
-    function debeEsperar() {
-      // Sin red no hay nada que intentar: espera al evento "online".
+    function mustWait() {
+      // Offline there is nothing to try: wait for the "online" event.
       if (navigator.onLine === false) return true;
-      // Pausar por estar la pestaña oculta NO es el defecto a proposito. Un
-      // chat en segundo plano que deja de reconectar en silencio esta roto:
-      // vuelves y te has perdido todo sin un solo aviso. Actívalo tu si tu
-      // caso tolera quedarse atras: {pauseWhenHidden: true}.
+      // Pausing because the tab is hidden is NOT the default, deliberately. A
+      // background chat that silently stops reconnecting is broken: you come
+      // back and you have missed everything without a single warning. Turn it
+      // on if your case tolerates falling behind: {pauseWhenHidden: true}.
       return o.pauseWhenHidden && document.visibilityState === "hidden";
     }
 
-    var esperando = false;
-    var dejarDeEsperar = null;          // desmonta los listeners de la espera
+    var waiting = false;
+    var stopWaiting = null;             // tears down the waiting listeners
 
-    function esperarAEstarListo() {
-      if (esperando) return;            // no acumules parejas de listeners
-      esperando = true;
+    function waitUntilReady() {
+      if (waiting) return;              // do not stack pairs of listeners
+      waiting = true;
 
-      function quitar() {
-        esperando = false;
-        dejarDeEsperar = null;
-        window.removeEventListener("online", despertar);
-        document.removeEventListener("visibilitychange", alVerse);
+      function teardown() {
+        waiting = false;
+        stopWaiting = null;
+        window.removeEventListener("online", wake);
+        document.removeEventListener("visibilitychange", onVisible);
       }
-      function despertar() {
-        if (!esperando) return;         // otro evento nos desperto primero
-        quitar();
-        if (cerradoPorNosotros) return; // nos cerraron mientras esperabamos
-        intentos = 0;                   // volver es buena señal: reintenta ya
-        conectar();
+      function wake() {
+        if (!waiting) return;           // another event woke us first
+        teardown();
+        if (closedByUs) return;         // we were closed while waiting
+        attempts = 0;                   // coming back is good news: retry now
+        connect();
       }
-      function alVerse() {
-        if (!debeEsperar()) despertar();
+      function onVisible() {
+        if (!mustWait()) wake();
       }
-      dejarDeEsperar = quitar;
-      window.addEventListener("online", despertar);
-      document.addEventListener("visibilitychange", alVerse);
+      stopWaiting = teardown;
+      window.addEventListener("online", wake);
+      document.addEventListener("visibilitychange", onVisible);
     }
 
-    function forzarReconexion() {
-      intentos = 0;
-      cerradoPorNosotros = false;       // reconectar a mano cancela el close()
-      if (dejarDeEsperar) dejarDeEsperar();
+    function forceReconnect() {
+      attempts = 0;
+      closedByUs = false;               // reconnecting by hand cancels close()
+      if (stopWaiting) stopWaiting();
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close(1000);
       }
-      conectar();
+      connect();
       return api;
     }
 
     function close(code, reason) {
-      cerradoPorNosotros = true;
-      clearTimeout(temporizador);
-      // Si estabamos aparcados esperando a que vuelva la red, hay que
-      // desmontar esos listeners: si no, el "online" de dentro de un rato
-      // reconectaria un socket que ya diste por cerrado.
-      if (dejarDeEsperar) dejarDeEsperar();
+      closedByUs = true;
+      clearTimeout(timer);
+      // If we were parked waiting for the network to come back, those
+      // listeners have to go: otherwise the "online" event a while from now
+      // would reconnect a socket you already considered closed.
+      if (stopWaiting) stopWaiting();
       if (ws) ws.close(code || 1000, reason || "");
       return api;
     }
 
-    conectar();
+    connect();
     return api;
   }
 
-  djangoSocket.esDefinitivo = esDefinitivo;
+  djangoSocket.isFinal = isFinal;
+  // 0.2.x name, kept so an upgrade breaks nobody. Goes away at 1.0.
+  djangoSocket.esDefinitivo = isFinal;
 
   global.djangoSocket = djangoSocket;
   if (typeof module === "object" && module.exports) module.exports = djangoSocket;

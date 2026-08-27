@@ -1,34 +1,34 @@
-"""Middleware: envuelve cada conexion, para lo que hay que hacer en todas.
+"""Middleware: wraps every connection, for whatever has to happen on all of them.
 
-Trazas, metricas, reportar errores a Sentry, limitar conexiones por usuario.
-Un middleware es `async def (sock, siguiente)`, y `siguiente()` corre el resto
-de la cadena y al final tu handler:
+Tracing, metrics, error reporting, connection limits. A middleware is
+`async def (sock, next_)`, and `next_()` runs the rest of the chain and finally
+your handler:
 
-    # miapp/ws.py
+    # myapp/ws.py
     import time, logging
 
-    log = logging.getLogger("miapp.sockets")
+    log = logging.getLogger("myapp.sockets")
 
-    async def medir(sock, siguiente):
-        inicio = time.monotonic()
+    async def measure(sock, next_):
+        start = time.monotonic()
         try:
-            await siguiente()
+            await next_()
         finally:
-            log.info("%s duro %.1fs", sock.path, time.monotonic() - inicio)
+            log.info("%s took %.1fs", sock.path, time.monotonic() - start)
 
     # settings.py
-    DJANGO_SOCKET = {"MIDDLEWARE": ["miapp.ws.medir"]}
+    DJANGO_SOCKET = {"MIDDLEWARE": ["myapp.ws.measure"]}
 
-Se aplican en orden: el primero de la lista es el mas externo, igual que el
-MIDDLEWARE de Django.
+They are applied in order: the first in the list is the outermost, the same as
+Django's own MIDDLEWARE.
 
-Para cortar una conexion, cierra y no llames a `siguiente()`:
+To reject a connection, close it and don't call `next_()`:
 
-    async def solo_de_pago(sock, siguiente):
-        if not await es_de_pago(sock.user):
-            await sock.close(4403, "Plan insuficiente")
+    async def paid_only(sock, next_):
+        if not await is_paid(sock.user):
+            await sock.close(4403, "Plan required")
             return
-        await siguiente()
+        await next_()
 """
 
 from __future__ import annotations
@@ -38,130 +38,143 @@ from typing import Awaitable, Callable
 
 logger = logging.getLogger("django_socket")
 
-Siguiente = Callable[[], Awaitable[None]]
+NextHandler = Callable[[], Awaitable[None]]
 Middleware = Callable[..., Awaitable[None]]
 
-_cadena: list[Middleware] | None = None
+_chain: list[Middleware] | None = None
 
 
 def get_middleware() -> list[Middleware]:
-    """Lee y cachea la lista de settings. Se resuelve una vez, no por conexion."""
-    global _cadena
-    if _cadena is None:
+    """Read and cache the list from settings. Resolved once, not per connection."""
+    global _chain
+    if _chain is None:
         from django.conf import settings
         from django.utils.module_loading import import_string
 
         conf = getattr(settings, "DJANGO_SOCKET", {}) or {}
-        _cadena = [
+        _chain = [
             import_string(m) if isinstance(m, str) else m
             for m in conf.get("MIDDLEWARE", [])
         ]
-        if _cadena:
+        if _chain:
             logger.debug(
                 "django_socket: %d middleware(s): %s",
-                len(_cadena),
-                ", ".join(getattr(m, "__name__", str(m)) for m in _cadena),
+                len(_chain),
+                ", ".join(getattr(m, "__name__", str(m)) for m in _chain),
             )
-    return _cadena
+    return _chain
 
 
-def limpiar_cache() -> None:
-    """Solo para tests: obliga a releer MIDDLEWARE de settings."""
-    global _cadena
-    _cadena = None
+def clear_cache() -> None:
+    """Tests only: force MIDDLEWARE to be read from settings again."""
+    global _chain
+    _chain = None
 
 
-async def aplicar(sock, handler_final: Siguiente) -> None:
+async def apply(sock, final_handler: NextHandler) -> None:
     """
-    Corre la cadena y, al final, el handler.
+    Run the chain and, at the end, the handler.
 
-    Se monta de dentro hacia fuera para que el primero de la lista quede el mas
-    externo, que es lo que la gente espera al leer un MIDDLEWARE de Django.
+    Built from the inside out so the first entry in the list ends up outermost,
+    which is what people expect after reading a Django MIDDLEWARE setting.
     """
-    cadena = get_middleware()
-    if not cadena:
-        await handler_final()
+    chain = get_middleware()
+    if not chain:
+        await final_handler()
         return
 
-    siguiente = handler_final
-    for mw in reversed(cadena):
-        siguiente = _envolver(mw, sock, siguiente)
-    await siguiente()
+    next_ = final_handler
+    for mw in reversed(chain):
+        next_ = _wrap(mw, sock, next_)
+    await next_()
 
 
-def _envolver(mw: Middleware, sock, siguiente: Siguiente) -> Siguiente:
-    async def llamada() -> None:
-        await mw(sock, siguiente)
+def _wrap(mw: Middleware, sock, next_: NextHandler) -> NextHandler:
+    async def call() -> None:
+        await mw(sock, next_)
 
-    llamada.__name__ = getattr(mw, "__name__", "middleware")
-    return llamada
-
-
-# ------------------------------------------------------- middlewares utiles
+    call.__name__ = getattr(mw, "__name__", "middleware")
+    return call
 
 
-def max_conexiones_por_usuario(limite: int = 5, code: int = 4429):
+# ---------------------------------------------------------- useful middleware
+
+
+def max_connections_per_user(limit: int = 5, code: int = 4429):
     """
-    Corta al usuario que abre mas de `limite` sockets a la vez.
+    Cut off a user who opens more than `limit` sockets at once.
 
         DJANGO_SOCKET = {
-            "MIDDLEWARE": [max_conexiones_por_usuario(10)],
+            "MIDDLEWARE": [max_connections_per_user(10)],
         }
 
-    Cuenta por proceso. Con varios workers el limite real es
-    `limite x workers`; para un tope global harian falta contadores en Redis, y
-    eso vale la pena solo si de verdad te hace falta esa precision.
+    Counted per process. With several workers the real ceiling is
+    `limit x workers`; a global cap would need counters in Redis, and that is
+    only worth it if you genuinely need that precision.
+
+    Behind a reverse proxy, anonymous visitors all share the proxy's IP and
+    therefore one bucket. Until `X-Forwarded-For` support lands, raise the
+    limit or key it off something you control.
     """
     from collections import defaultdict
 
-    abiertas: dict[object, int] = defaultdict(int)
+    open_count: dict[object, int] = defaultdict(int)
 
-    async def middleware(sock, siguiente):
+    async def middleware(sock, next_):
         user = getattr(sock, "user", None)
-        autenticado = getattr(user, "is_authenticated", False)
-        clave = getattr(user, "pk", None) if autenticado else None
-        if clave is None:
-            clave = (sock.client or ("?", 0))[0]      # anonimos, por IP
+        is_auth = getattr(user, "is_authenticated", False)
+        key = getattr(user, "pk", None) if is_auth else None
+        if key is None:
+            key = (sock.client or ("?", 0))[0]      # anonymous, by IP
 
-        if abiertas[clave] >= limite:
+        if open_count[key] >= limit:
             logger.warning(
-                "django_socket: %r supero %d conexiones simultaneas en %s",
-                clave, limite, sock.path,
+                "django_socket: %r went over %d simultaneous connections on %s",
+                key, limit, sock.path,
             )
             await sock.close(code, "Too many connections")
             return
 
-        abiertas[clave] += 1
+        open_count[key] += 1
         try:
-            await siguiente()
+            await next_()
         finally:
-            abiertas[clave] -= 1
-            if abiertas[clave] <= 0:
-                abiertas.pop(clave, None)
+            open_count[key] -= 1
+            if open_count[key] <= 0:
+                open_count.pop(key, None)
 
-    middleware.__name__ = "max_conexiones_por_usuario"
+    middleware.__name__ = "max_connections_per_user"
     return middleware
 
 
-def registrar(nivel: int = logging.INFO, logger_name: str = "django_socket.access"):
-    """Una linea por conexion: ruta, usuario, duracion y como termino."""
+def log_connections(
+    level: int = logging.INFO, logger_name: str = "django_socket.access"
+):
+    """One line per connection: path, user, duration and how it ended."""
     import time
 
     log = logging.getLogger(logger_name)
 
-    async def middleware(sock, siguiente):
-        inicio = time.monotonic()
+    async def middleware(sock, next_):
+        start = time.monotonic()
         try:
-            await siguiente()
+            await next_()
         finally:
             log.log(
-                nivel,
+                level,
                 "%s user=%s dur=%.2fs code=%s",
                 sock.path,
                 getattr(sock.user, "pk", None) or "anon",
-                time.monotonic() - inicio,
+                time.monotonic() - start,
                 sock.close_code,
             )
 
-    middleware.__name__ = "registrar"
+    middleware.__name__ = "log_connections"
     return middleware
+
+
+# --------------------------------------------------------- 0.2.x compatibility
+# These names shipped in 0.2.x and were documented in the README. They keep
+# working so a 0.2.x project does not break on upgrade, and go away at 1.0.
+max_conexiones_por_usuario = max_connections_per_user
+registrar = log_connections

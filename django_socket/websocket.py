@@ -1,4 +1,4 @@
-"""El objeto WebSocket que recibe cada handler."""
+"""The WebSocket object every handler receives."""
 
 from __future__ import annotations
 
@@ -10,44 +10,46 @@ from urllib.parse import parse_qs
 
 
 class WebSocketDisconnect(Exception):
-    """El cliente cerro la conexion."""
+    """The connection is gone."""
 
     def __init__(self, code: int = 1000, reason: str = ""):
         self.code = code
         self.reason = reason
-        super().__init__(f"WebSocket cerrado (code={code})")
+        super().__init__(f"WebSocket closed (code={code})")
 
 
 class WebSocketClosed(Exception):
-    """Se intento usar un socket que el servidor ya cerro."""
+    """Something tried to use a socket the server has already closed."""
 
 
 class RateLimited(Exception):
-    """El cliente manda mas deprisa de lo permitido."""
+    """The client is sending faster than allowed."""
 
-    def __init__(self, espera: float, code: int):
-        self.espera = espera
+    def __init__(self, retry_after: float, code: int):
+        self.retry_after = retry_after
         self.code = code
-        super().__init__(f"Rate limit excedido; reintenta en {espera:.1f}s")
+        super().__init__(f"Rate limit exceeded; retry in {retry_after:.1f}s")
 
 
 class InvalidJSON(ValueError):
     """
-    El cliente mando algo que no es JSON valido.
+    The client sent something that is not valid JSON.
 
-    Es una ValueError, asi que `except ValueError` de toda la vida sigue
-    valiendo. Existe como tipo propio para que el dispatcher la distinga de un
-    fallo del servidor: culpa del cliente se cierra con 4400, no con un 1011
-    que ademas te llena el log de tracebacks que no son tuyos.
+    It is a ValueError, so a plain `except ValueError` still catches it. It
+    exists as its own type so the dispatcher can tell it apart from a server
+    failure: the client's fault closes with 4400, not with a 1011 that would
+    also fill your log with tracebacks that are not yours.
     """
 
-    def __init__(self, crudo, motivo=""):
-        self.crudo = crudo
-        muestra = str(crudo)
-        if len(muestra) > 80:
-            muestra = muestra[:77] + "..."
-        super().__init__(f"JSON invalido del cliente: {muestra!r}"
-                         + (f" ({motivo})" if motivo else ""))
+    def __init__(self, raw, reason=""):
+        self.raw = raw
+        sample = str(raw)
+        if len(sample) > 80:
+            sample = sample[:77] + "..."
+        super().__init__(
+            f"Invalid JSON from the client: {sample!r}"
+            + (f" ({reason})" if reason else "")
+        )
 
 
 _encoder = None
@@ -55,20 +57,21 @@ _encoder = None
 
 def _get_encoder():
     """
-    DjangoJSONEncoder, cargado tarde para no tocar settings al importar.
+    DjangoJSONEncoder, imported late so importing this module never touches
+    settings.
 
-    Importa porque es el que sabe de tipos de Django, y sobre todo por las
-    fechas. `str(aware)` da "2026-08-26 19:43:30.251057+00:00"; el encoder da
-    "2026-08-26T19:43:30.251Z". Dos diferencias que si cuentan:
+    It matters because it is the one that knows Django's types, and above all
+    because of dates. `str(aware)` gives "2026-08-26 19:43:30.251057+00:00";
+    the encoder gives "2026-08-26T19:43:30.251Z". Two differences that count:
 
-    * ISO-8601 es el unico formato que la spec de ECMAScript obliga a `Date`
-      a parsear. Lo demas es un fallback de cada motor -- V8 es permisivo y lo
-      acepta, otros historicamente no.
-    * `str()` emite microsegundos (6 digitos) y `Date` solo entiende
-      milisegundos; el encoder trunca a 3, que es lo que JS puede representar.
+    * ISO-8601 is the only format the ECMAScript spec requires `Date` to
+      parse. Anything else is each engine's fallback -- V8 is lenient and
+      accepts it, others historically are not.
+    * `str()` emits microseconds (6 digits) and `Date` only understands
+      milliseconds; the encoder truncates to 3, which is what JS can represent.
 
-    Y de paso `Decimal` sale como cadena para no perder precision, y `UUID` y
-    las cadenas lazy de traduccion se serializan solas.
+    On the way it also renders `Decimal` as a string so precision is not lost,
+    and serializes `UUID` and lazy translation strings on its own.
     """
     global _encoder
     if _encoder is None:
@@ -80,12 +83,12 @@ def _get_encoder():
                     return super().default(o)
                 except TypeError:
                     raise TypeError(
-                        f"No se puede enviar un {type(o).__name__} por el "
-                        f"socket. Los tipos de Django habituales (datetime, "
-                        f"date, time, timedelta, Decimal, UUID, cadenas lazy) "
-                        f"van solos; el resto conviertelo tu: un modelo a dict, "
-                        f"un QuerySet a lista. Si prefieres el comportamiento "
-                        f"antiguo: sock.send_json(dato, default=str)."
+                        f"Cannot send a {type(o).__name__} over the socket. "
+                        f"The usual Django types (datetime, date, time, "
+                        f"timedelta, Decimal, UUID, lazy strings) go through "
+                        f"on their own; convert the rest yourself: a model to "
+                        f"a dict, a QuerySet to a list. For the old permissive "
+                        f"behaviour: sock.send_json(value, default=str)."
                     ) from None
 
         _encoder = SocketJSONEncoder
@@ -93,7 +96,7 @@ def _get_encoder():
 
 
 class Message:
-    """Un mensaje entrante. Usa `.text`, `.bytes` o `.json()`."""
+    """An incoming message. Use `.text`, `.bytes` or `.json()`."""
 
     __slots__ = ("text", "bytes")
 
@@ -102,26 +105,26 @@ class Message:
         self.bytes = data
 
     def json(self, **kwargs) -> Any:
-        """Parsea el mensaje como JSON. Lanza `InvalidJSON` si no lo es."""
-        crudo = self.text
-        if crudo is None:
+        """Parse the message as JSON. Raises `InvalidJSON` if it is not."""
+        raw = self.text
+        if raw is None:
             if self.bytes is None:
-                raise InvalidJSON("", "mensaje vacio")
+                raise InvalidJSON("", "empty message")
             try:
-                crudo = self.bytes.decode()
+                raw = self.bytes.decode()
             except UnicodeDecodeError as exc:
-                raise InvalidJSON(self.bytes, "no es UTF-8 valido") from exc
+                raise InvalidJSON(self.bytes, "not valid UTF-8") from exc
         try:
-            return json.loads(crudo, **kwargs)
+            return json.loads(raw, **kwargs)
         except ValueError as exc:
-            raise InvalidJSON(crudo, str(exc)) from None
+            raise InvalidJSON(raw, str(exc)) from None
 
     @property
     def is_text(self) -> bool:
         return self.text is not None
 
     def __eq__(self, other) -> bool:
-        """Permite `if msg == "ping"` sin sacar .text a mano."""
+        """Allows `if msg == "ping"` without reaching for .text."""
         if isinstance(other, str):
             return self.text == other
         if isinstance(other, (bytes, bytearray)):
@@ -148,11 +151,11 @@ CONNECTING, OPEN, CLOSED = "connecting", "open", "closed"
 
 class WebSocket:
     """
-    Envoltura sobre el par (receive, send) de ASGI.
+    A wrapper over the ASGI (receive, send) pair.
 
-    No hace falta llamar a `accept()`: el handshake se completa solo la primera
-    vez que envias, recibes o iteras. Llamalo a mano solo si necesitas fijar un
-    subprotocolo o headers, y llama a `close()` de entrada para rechazar.
+    You don't need to call `accept()`: the handshake completes on its own the
+    first time you send, receive or iterate. Call it by hand only when you need
+    to set a subprotocol or headers, and call `close()` up front to reject.
     """
 
     def __init__(self, scope, receive, send, *, layer=None):
@@ -162,18 +165,18 @@ class WebSocket:
         self._layer = layer
         self._state = CONNECTING
         self._groups: set[str] = set()
-        self.group: str | None = None   # destino por defecto de broadcast()
-        self._rate = None                           # cubo de rate limit
-        self._outbox: asyncio.Queue | None = None   # solo para difusion
-        self._outbox_full: str = "close"
+        self.group: str | None = None   # default target for broadcast()
+        self._rate = None                           # rate-limit bucket
+        self._outbox: asyncio.Queue | None = None   # fan-out only
+        self._outbox_policy: str = "close"
         self._writer: asyncio.Task | None = None
         self.close_code: int | None = None
-        # Rellenados por el dispatcher antes de invocar el handler.
+        # Filled in by the dispatcher before the handler runs.
         self.user = None
         self.session = None
         self.path_params: dict[str, Any] = {}
 
-    # ------------------------------------------------------------------ datos
+    # ------------------------------------------------------------------- data
 
     @property
     def path(self) -> str:
@@ -190,7 +193,7 @@ class WebSocket:
 
     @property
     def query_params(self) -> dict[str, str]:
-        """Solo el primer valor de cada clave; usa `query_lists` si se repiten."""
+        """Only the first value of each key; use `query_lists` if they repeat."""
         if not hasattr(self, "_qp"):
             raw = self.scope.get("query_string", b"").decode("utf-8", "replace")
             self._ql = parse_qs(raw, keep_blank_values=True)
@@ -199,7 +202,7 @@ class WebSocket:
 
     @property
     def query_lists(self) -> dict[str, list[str]]:
-        self.query_params  # fuerza el parseo
+        self.query_params  # noqa: B018 - forces the parse
         return self._ql
 
     @property
@@ -225,17 +228,17 @@ class WebSocket:
 
     @property
     def groups(self) -> frozenset[str]:
-        """De que grupos eres miembro ahora mismo (vacio tras desconectar).
+        """Which groups you are a member of right now (empty after disconnect).
 
-        Distinto de `sock.group`, que es el destino por defecto de broadcast()
-        y sigue apuntando al mismo sitio despues de la desconexion.
+        Different from `sock.group`, which is the default target for
+        broadcast() and keeps pointing at the same place after disconnection.
         """
         return frozenset(self._groups)
 
     def __repr__(self) -> str:
         return f"<WebSocket {self.path} {self._state}>"
 
-    # ------------------------------------------------------------- handshake
+    # -------------------------------------------------------------- handshake
 
     async def accept(self, subprotocol: str | None = None, headers=None) -> None:
         if self._state != CONNECTING:
@@ -256,22 +259,22 @@ class WebSocket:
         if self._state == CONNECTING:
             await self.accept()
         elif self._state == CLOSED:
-            raise WebSocketClosed("El socket ya esta cerrado.")
+            raise WebSocketClosed("The socket is already closed.")
 
     async def close(self, code: int = 1000, reason: str = "") -> None:
         """
-        Cierra entregando `code` y `reason` al cliente.
+        Close, delivering `code` and `reason` to the client.
 
-        Si el handshake aun no se completo lo completa primero: cerrar sin
-        aceptar hace que el servidor conteste un HTTP 403 y el navegador reciba
-        un `onclose` con code 1006 y sin motivo. Aceptando y cerrando acto
-        seguido, el JS del cliente recibe tu codigo tal cual y puede distinguir
-        "falta login" de "sala inexistente". Usa `deny()` si prefieres tumbar
-        el handshake.
+        If the handshake has not completed yet, it completes first: closing
+        without accepting makes the server answer an HTTP 403 and the browser
+        gets an `onclose` with code 1006 and no reason. Accepting and closing
+        right after means the client's JS receives your code as-is and can tell
+        "needs login" from "no such room". Use `deny()` if you would rather
+        kill the handshake instead.
         """
         if self._state == CLOSED:
             return
-        await self._vaciar_buzon()
+        await self._flush_outbox()
         await self._leave_all()
         try:
             if self._state == CONNECTING:
@@ -280,15 +283,15 @@ class WebSocket:
                 {"type": "websocket.close", "code": code, "reason": reason}
             )
         except Exception:
-            pass  # el cliente ya se fue
+            pass  # the client is already gone
         self._state = CLOSED
         self.close_code = code
 
     async def deny(self, code: int = 403) -> None:
         """
-        Rechaza el handshake sin aceptarlo: el cliente ve un HTTP 403 y nunca
-        llega a existir un WebSocket. Mas seguro cuando la conexion no deberia
-        haberse intentado siquiera (origen no permitido).
+        Reject the handshake without accepting it: the client sees an HTTP 403
+        and a WebSocket never comes into being. Safer when the connection
+        should not have been attempted at all (a disallowed origin).
         """
         if self._state != CONNECTING:
             return await self.close(1008, "Denied")
@@ -299,33 +302,33 @@ class WebSocket:
         self._state = CLOSED
         self.close_code = code
 
-    # --------------------------------------------------------------- entrada
+    # ------------------------------------------------------------------ input
 
     async def receive(self) -> Message:
         """
-        El siguiente mensaje. Lanza `WebSocketDisconnect` cuando ya no hay
-        conexion, venga de donde venga.
+        The next message. Raises `WebSocketDisconnect` once there is no
+        connection left, whatever the cause.
 
-        Ese "venga de donde venga" importa: el socket tambien puede cerrarse
-        sin que el cliente se vaya -- porque le echamos por no consumir, o
-        porque murio su escritor. Antes eso salia como `WebSocketClosed`, que
-        no es `WebSocketDisconnect`, asi que reventaba el `async for` del
-        handler en vez de terminarlo: traza en el log, cierre con 1011, y el
-        codigo de limpieza posterior sin ejecutar. Aparecio con 6000
-        conexiones, que es justo cuando empieza a haber expulsiones.
+        That "whatever the cause" matters: the socket can also close without
+        the client leaving -- because we evicted it for not consuming, or
+        because its writer died. That used to surface as `WebSocketClosed`,
+        which is not a `WebSocketDisconnect`, so it blew up the handler's
+        `async for` instead of ending it: a traceback in the log, a 1011 close,
+        and the cleanup code after the loop never running. It showed up at 6000
+        connections, which is exactly when evictions start.
         """
         if self._state == CLOSED:
             raise WebSocketDisconnect(
                 self.close_code if self.close_code is not None else 1006,
-                "el socket ya estaba cerrado",
+                "the socket was already closed",
             )
         await self._ensure_open()
         event = await self._receive()
         if event["type"] == "websocket.receive" and self._rate is not None:
-            if not self._rate.consumir():
+            if not self._rate.consume():
                 from .ratelimit import CLOSE_RATE_LIMIT
 
-                raise RateLimited(self._rate.espera, CLOSE_RATE_LIMIT)
+                raise RateLimited(self._rate.retry_after, CLOSE_RATE_LIMIT)
         if event["type"] == "websocket.disconnect":
             self._state = CLOSED
             self.close_code = event.get("code", 1005)
@@ -336,13 +339,13 @@ class WebSocket:
     async def receive_text(self) -> str:
         msg = await self.receive()
         if msg.text is None:
-            raise TypeError("Se esperaba un frame de texto y llego uno binario.")
+            raise TypeError("Expected a text frame, got a binary one.")
         return msg.text
 
     async def receive_bytes(self) -> bytes:
         msg = await self.receive()
         if msg.bytes is None:
-            raise TypeError("Se esperaba un frame binario y llego uno de texto.")
+            raise TypeError("Expected a binary frame, got a text one.")
         return msg.bytes
 
     async def receive_json(self, **kwargs) -> Any:
@@ -366,10 +369,10 @@ class WebSocket:
         async for msg in self:
             yield msg.json()
 
-    # ---------------------------------------------------------------- salida
+    # ----------------------------------------------------------------- output
 
     async def send(self, data: Any) -> None:
-        """str -> texto, bytes -> binario, cualquier otra cosa -> JSON."""
+        """str -> text, bytes -> binary, anything else -> JSON."""
         if isinstance(data, str):
             await self.send_text(data)
         elif isinstance(data, (bytes, bytearray, memoryview)):
@@ -387,21 +390,21 @@ class WebSocket:
 
     async def send_json(self, data: Any, **kwargs) -> None:
         """
-        Serializa con el codificador de Django: `datetime` sale en ISO-8601,
-        `Decimal` como cadena, `UUID` y las cadenas lazy tambien.
+        Serialize with Django's encoder: `datetime` in ISO-8601, `Decimal` as a
+        string, `UUID` and lazy strings too.
 
-        Un objeto que no sepa serializar lanza un TypeError que dice cual es y
-        que hacer, en vez de mandar `"Usuario object (3)"` al navegador y que
-        te enteres en produccion.
+        An object it cannot serialize raises a TypeError that names it and says
+        what to do, instead of shipping `"User object (3)"` to the browser and
+        letting you find out in production.
         """
         if "default" not in kwargs:
             kwargs.setdefault("cls", _get_encoder())
         await self.send_text(json.dumps(data, **kwargs))
 
-    # ---------------------------------------------------------------- grupos
+    # ----------------------------------------------------------------- groups
 
     async def join(self, *groups: str) -> None:
-        """El primer grupo al que entras pasa a ser el destino por defecto."""
+        """The first group you join becomes the default broadcast target."""
         for g in groups:
             await self._layer.add(g, self)
             self._groups.add(g)
@@ -419,52 +422,53 @@ class WebSocket:
         self, data: Any, *, to: str | None = None, exclude_self: bool = False
     ) -> None:
         """
-        Envia a todos los miembros de un grupo.
+        Send to every member of a group.
 
-            await sock.broadcast(data)                  # al grupo por defecto
-            await sock.broadcast(data, to="otro:grupo")
+            await sock.broadcast(data)                  # to the default group
+            await sock.broadcast(data, to="other:group")
             await sock.broadcast(data, exclude_self=True)
         """
         target = to or self.group
         if target is None:
             raise ValueError(
-                "sock.broadcast(data) sin grupo por defecto. Entra en uno con "
-                "await sock.join('mi:grupo'), declaralo en la ruta con "
-                "@ws(..., group='mi:{param}') o indica el destino con "
-                "sock.broadcast(data, to='mi:grupo')."
+                "sock.broadcast(data) with no default group. Join one with "
+                "await sock.join('my:group'), declare it on the route with "
+                "@ws(..., group='my:{param}'), or name the target with "
+                "sock.broadcast(data, to='my:group')."
             )
         await self._layer.send(target, data, exclude=self if exclude_self else None)
 
-    # -------------------------------------------------------------- fan-out
+    # ---------------------------------------------------------------- fan-out
 
     async def enqueue(self, data: Any) -> bool:
         """
-        Encola un mensaje de difusion. `False` si este cliente va tan atrasado
-        que hay que echarlo.
+        Queue a broadcast message. `False` when this client is so far behind
+        that it has to be evicted.
 
-        No espera a que se escriba, y eso es el punto. `sock.send()` si espera
-        --ahi el bloqueo es sano: si el cliente no puede seguirte, tu handler
-        va mas despacio--. Pero en un broadcast esperar es ruinoso: uno solo
-        que no lea deja colgado para siempre al que difunde, y con el su bucle
-        de lectura y su limpieza. Medido: uvicorn frena a los ~24 MB, y a
-        partir de ahi `send()` no vuelve.
+        It does not wait for the write, and that is the whole point.
+        `sock.send()` does wait -- blocking there is healthy: if the client
+        cannot keep up with you, your handler slows down. But waiting inside a
+        broadcast is ruinous: a single client that stops reading hangs the
+        broadcaster forever, and with it that handler's read loop and cleanup.
+        Measured: uvicorn applies backpressure at around 24 MB, and past that
+        `send()` never returns.
         """
         if self._state == CLOSED:
             return False
 
         if self._outbox is None:
-            maximo, self._outbox_full = _config_outbox()
-            self._outbox = asyncio.Queue(maxsize=maximo)
+            maximum, self._outbox_policy = _config_outbox()
+            self._outbox = asyncio.Queue(maxsize=maximum)
         if self._writer is None or self._writer.done():
-            self._writer = asyncio.create_task(self._drenar())
+            self._writer = asyncio.create_task(self._drain_loop())
 
         try:
             self._outbox.put_nowait(data)
             return True
         except asyncio.QueueFull:
-            if self._outbox_full == "drop_oldest":
-                # Para flujos que toleran huecos (posiciones, telemetria):
-                # mas vale perder lo viejo que echar al cliente.
+            if self._outbox_policy == "drop_oldest":
+                # For streams that tolerate gaps (cursor positions, telemetry):
+                # better to lose the oldest value than to evict the client.
                 try:
                     self._outbox.get_nowait()
                 except asyncio.QueueEmpty:
@@ -473,8 +477,8 @@ class WebSocket:
                 return True
             return False
 
-    async def _drenar(self) -> None:
-        """Escribe el buzon en orden. Si el socket muere, se sale de los grupos."""
+    async def _drain_loop(self) -> None:
+        """Write the outbox in order. If the socket dies, leave its groups."""
         try:
             while True:
                 data = await self._outbox.get()
@@ -491,16 +495,16 @@ class WebSocket:
 
     def evict(self, code: int = 1013, reason: str = "Client too slow") -> None:
         """
-        Echa a un cliente que no consume, sin esperarle.
+        Throw out a client that is not consuming, without waiting for it.
 
-        No se puede `await close()`: escribir hacia el esta bloqueado, que es
-        justo el motivo por el que lo estamos echando. Se cancela el escritor y
-        el cierre sale en segundo plano con plazo.
+        `await close()` is not an option: writing towards it is blocked, which
+        is precisely why we are evicting it. The writer is cancelled and the
+        close goes out in the background with a deadline.
 
-        El handler de ese cliente sigue parado en `receive()` hasta que el
-        servidor ASGI le entregue el `websocket.disconnect`; con uvicorn eso
-        llega como mucho en ping_interval + ping_timeout (40 s por defecto).
-        Mientras tanto no consume nada y ya esta fuera de todos los grupos.
+        That client's handler stays parked in `receive()` until the ASGI server
+        delivers its `websocket.disconnect`; with uvicorn that arrives within
+        ping_interval + ping_timeout at the latest (40 s by default). Meanwhile
+        it consumes nothing and is already out of every group.
         """
         if self._state == CLOSED:
             return
@@ -508,12 +512,14 @@ class WebSocket:
         self.close_code = code
         if self._writer is not None:
             self._writer.cancel()
-        asyncio.get_running_loop().create_task(self._cerrar_en_diferido(code, reason))
+        asyncio.get_running_loop().create_task(self._close_later(code, reason))
 
-    async def _cerrar_en_diferido(self, code: int, reason: str) -> None:
+    async def _close_later(self, code: int, reason: str) -> None:
         try:
             await asyncio.wait_for(
-                self._send({"type": "websocket.close", "code": code, "reason": reason}),
+                self._send(
+                    {"type": "websocket.close", "code": code, "reason": reason}
+                ),
                 timeout=5,
             )
         except Exception:
@@ -521,11 +527,11 @@ class WebSocket:
 
     async def drain(self, timeout: float = 1.0) -> None:
         """
-        Espera a que salga todo lo encolado para difusion.
+        Wait for everything queued for fan-out to go out.
 
-        En produccion no hace falta: el escritor va solo y `broadcast` no
-        espera a nadie a proposito. En un test si, para afirmar sobre lo que ya
-        llego en vez de dormir a ciegas y cruzar los dedos.
+        Not needed in production: the writer runs on its own and `broadcast`
+        deliberately waits for nobody. In a test it is, so you can assert on
+        what has actually arrived instead of sleeping blindly and hoping.
         """
         if self._outbox is None:
             return
@@ -534,27 +540,27 @@ class WebSocket:
         except asyncio.TimeoutError:
             pass
 
-    async def _vaciar_buzon(self, plazo: float = 1.0) -> None:
-        """Da al escritor una ultima oportunidad antes de cerrar."""
+    async def _flush_outbox(self, deadline: float = 1.0) -> None:
+        """Give the writer one last chance before closing."""
         if self._outbox is None or self._writer is None or self._writer.done():
             return
         try:
-            await asyncio.wait_for(self._outbox.join(), timeout=plazo)
+            await asyncio.wait_for(self._outbox.join(), timeout=deadline)
         except Exception:
             pass
 
-    def _parar_escritor(self) -> None:
+    def _stop_writer(self) -> None:
         """
-        Cancela la tarea escritora. Idempotente.
+        Cancel the writer task. Idempotent.
 
-        Va en la limpieza comun y no solo en `close()`, porque el camino
-        habitual es el otro: el cliente se desconecta, `receive()` marca el
-        socket cerrado, y entonces `close()` sale de vuelta sin llegar a
-        cancelar nada. Era una tarea huerfana por cada conexion que terminaba.
+        It lives in the common cleanup and not only in `close()`, because the
+        usual path is the other one: the client disconnects, `receive()` marks
+        the socket closed, and then `close()` returns early without cancelling
+        anything. That was one orphaned task per connection that ended.
         """
         if self._writer is None or self._writer.done():
             return
-        # No te canceles a ti mismo: _drenar() tambien pasa por aqui al fallar.
+        # Don't cancel yourself: _drain_loop() comes through here when it fails.
         try:
             if asyncio.current_task() is self._writer:
                 return
@@ -564,19 +570,20 @@ class WebSocket:
 
     async def _leave_all(self) -> None:
         """
-        Saca el socket de sus grupos, pero NO borra `self.group`.
+        Take the socket out of its groups, but do NOT clear `self.group`.
 
-        `groups` es de que grupos eres miembro; `group` es a donde apunta
-        broadcast() por defecto. Al desconectar dejas de ser miembro, pero el
-        destino sigue siendo valido: si no, el patron mas comun que existe
+        `groups` is which groups you are a member of; `group` is where
+        broadcast() points by default. On disconnect you stop being a member,
+        but the target is still valid -- otherwise the most common pattern
+        there is
 
             async for msg in sock:
                 ...
-            await sock.broadcast({"tipo": "sale"})   # <- ya sin grupo
+            await sock.broadcast({"kind": "leave"})   # <- no group left
 
-        se quedaria sin destino justo en la linea en la que hace falta.
+        would lose its target on the exact line where it is needed.
         """
-        self._parar_escritor()
+        self._stop_writer()
         if self._groups and self._layer is not None:
             for g in list(self._groups):
                 await self._layer.discard(g, self)
@@ -585,16 +592,16 @@ class WebSocket:
 
 def _config_outbox() -> tuple[int, str]:
     """
-    Tamaño del buzon de difusion y que hacer cuando se llena.
+    Size of the fan-out outbox and what to do when it fills up.
 
-    El 256 no es un numero redondo elegido a ojo: medido, un proceso publica
-    ~1.500 broadcast/s contra Redis, asi que un buzon de 64 se llenaria en
-    42 ms a maxima tasa -- menos de lo que dura un hipo de red movil o una
-    pausa de GC, y echarias a clientes sanos. Con 256 el margen sube a ~170 ms
-    en el peor caso, y a decenas de segundos al ritmo de un chat normal.
+    The 256 is not a round number picked by eye: measured, one process
+    publishes ~1,500 broadcasts/s against Redis, so an outbox of 64 would fill
+    in 42 ms at full rate -- less than a mobile network hiccup or a GC pause,
+    and you would be evicting healthy clients. At 256 the margin rises to
+    ~170 ms in the worst case, and to tens of seconds at normal chat rates.
 
-    El coste en memoria solo lo pagan los clientes atascados: uno que consume
-    tiene el buzon a cero. Son `atascados x 256 x tamaño_del_mensaje`.
+    Only stuck clients pay the memory cost: one that keeps up has an empty
+    outbox. It is `stuck x 256 x message_size`.
     """
     from django.conf import settings
 

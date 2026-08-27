@@ -256,7 +256,7 @@ async def test_la_desconexion_normal_no_deja_tareas_huerfanas(transporte):
 
 async def test_no_quedan_escritores_vivos_tras_una_sala_entera(transporte):
     """Ni uno por conexion: en un servidor de verdad eso se acumula."""
-    vivos_antes = len([t for t in asyncio.all_tasks() if "_drenar" in str(t.get_coro())])
+    vivos_antes = len([t for t in asyncio.all_tasks() if "_drain_loop" in str(t.get_coro())])
 
     for _ in range(20):
         sock, _ = sock_de(transporte)
@@ -265,7 +265,7 @@ async def test_no_quedan_escritores_vivos_tras_una_sala_entera(transporte):
         await sock.close()
 
     await asyncio.sleep(0)
-    vivos = [t for t in asyncio.all_tasks() if "_drenar" in str(t.get_coro())]
+    vivos = [t for t in asyncio.all_tasks() if "_drain_loop" in str(t.get_coro())]
     assert len(vivos) <= vivos_antes, f"quedaron {len(vivos)} escritores vivos"
 
 

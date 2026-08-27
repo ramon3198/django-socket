@@ -4,6 +4,44 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 Versioning: while below 1.0, **minor versions may change the API**. Patch
 versions never do.
 
+## [0.3.0] — 2026-08-27
+
+### Changed — the public API is now entirely in English
+
+The API had drifted into a mix: the core was English (`ws`, `broadcast`,
+`Events`, `login_required`) while newer additions came out in Spanish
+(`extraer_token`, `max_conexiones_por_usuario`, `registrar`), and **every error
+message and log line was in Spanish** next to an English README. Those error
+messages are among the better parts of this library — they tell you what to do
+next — and half the intended audience could not read them.
+
+Renamed:
+
+| 0.2.x | 0.3.0 |
+|---|---|
+| `extraer_token` | `extract_token` |
+| `middleware.max_conexiones_por_usuario` | `middleware.max_connections_per_user` |
+| `middleware.registrar` | `middleware.log_connections` |
+| `middleware.aplicar` | `middleware.apply` |
+| `middleware.limpiar_cache` | `middleware.clear_cache` |
+| `testing.TimeoutDelEsperado` | `testing.ReceiveTimeout` |
+| `ratelimit.Cubo` | `ratelimit.TokenBucket` |
+| `ratelimit.parsear` / `crear` | `ratelimit.parse_rate` / `make_bucket` |
+| `authentication.resolver_lista` | `authentication.resolve_authenticators` |
+| `events.CUALQUIERA` | `events.ANY` |
+| `TokenBucket.consumir` / `.espera` | `.consume` / `.retry_after` |
+| `InvalidJSON.crudo` | `InvalidJSON.raw` |
+| `Events.tipos` | `Events.types` |
+| `djangoSocket.esDefinitivo` (JS) | `djangoSocket.isFinal` |
+
+`extraer_token`, `max_conexiones_por_usuario`, `registrar` and
+`djangoSocket.esDefinitivo` — the ones 0.2.x exported and documented — keep
+working as aliases so upgrading does not break anyone. They go away at 1.0.
+
+Every error message, log line, docstring and comment in the library is now in
+English, and so is the output of `manage.py ws` and `manage.py runserver`. The
+README showed that command printing English headings it never actually printed.
+
 ## [0.2.2] — 2026-08-27
 
 ### Fixed

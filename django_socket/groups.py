@@ -1,7 +1,7 @@
-"""Capa de difusion: grupos y broadcast.
+"""The fan-out layer: groups and broadcast.
 
-`MemoryLayer` sirve para un solo proceso (dev, o un unico worker).
-`RedisLayer` reparte el fan-out entre procesos via pub/sub.
+`MemoryLayer` is for a single process (development, or one worker).
+`RedisLayer` spreads the fan-out across processes via pub/sub.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ class BaseLayer:
 
 
 class MemoryLayer(BaseLayer):
-    """Grupos en memoria del proceso. Sin dependencias externas."""
+    """In-process groups. No external dependencies."""
 
     def __init__(self):
         self._groups: dict[str, set] = {}
@@ -56,33 +56,33 @@ class MemoryLayer(BaseLayer):
 
     async def _deliver_local(self, group: str, data: Any, *, exclude=None) -> None:
         """
-        Reparte encolando, sin esperar a que nadie lea.
+        Deliver by queueing, without waiting for anyone to read.
 
-        Esperar seria el bug: un solo miembro que no consume dejaria colgado
-        para siempre al que difunde. Cada socket tiene un buzon acotado; si se
-        llena, ese cliente va demasiado atrasado y se le echa en vez de dejar
-        que arrastre a los demas.
+        Waiting would be the bug: a single member that stops consuming would
+        hang the broadcaster forever. Every socket has a bounded outbox; if it
+        fills up, that client is too far behind and gets evicted rather than
+        being allowed to drag everyone else down.
         """
-        miembros = [s for s in self._groups.get(group, ()) if s is not exclude]
-        if not miembros:
+        members = [s for s in self._groups.get(group, ()) if s is not exclude]
+        if not members:
             return
 
-        lentos = []
-        for sock in miembros:
+        slow = []
+        for sock in members:
             if not await sock.enqueue(data):
-                lentos.append(sock)
+                slow.append(sock)
 
-        # Cede el turno una vez por difusion, no una por miembro: es donde
-        # corren los escritores. Sin esto, un handler que difunde en bucle
-        # (`for fila in lote: await sock.broadcast(fila)`) no soltaria nunca el
-        # loop, los buzones se llenarian y acabaria echando a clientes sanos.
+        # Yield once per broadcast, not once per member: that is where the
+        # writers run. Without it, a handler broadcasting in a loop
+        # (`for row in batch: await sock.broadcast(row)`) would never release
+        # the loop, outboxes would fill, and it would evict healthy clients.
         await asyncio.sleep(0)
 
-        for sock in lentos:
+        for sock in slow:
             logger.warning(
-                "django_socket: %r no consume (buzon lleno); se le echa del "
-                "grupo %r. Sube DJANGO_SOCKET['SEND_QUEUE_MAX'] si tu caso "
-                "manda rafagas legitimas.",
+                "django_socket: %r is not consuming (outbox full); evicting from "
+                "group %r. Raise DJANGO_SOCKET['SEND_QUEUE_MAX'] if your case "
+                "sends legitimate bursts.",
                 sock, group,
             )
             sock.evict()
@@ -91,17 +91,17 @@ class MemoryLayer(BaseLayer):
 
 class RedisLayer(MemoryLayer):
     """
-    Mantiene los miembros locales igual que MemoryLayer, pero publica cada
-    broadcast en Redis para que los demas procesos entreguen a los suyos.
+    Keeps local members just like MemoryLayer, but publishes every
+    broadcast to Redis so the other processes deliver to theirs.
 
-    Sobrevive a que Redis se caiga: la entrega local sigue funcionando, los
-    sockets de los usuarios no se cierran, y al volver Redis el proceso se
-    resuscribe solo. Lo que se publique mientras esta caido se pierde -- esto
-    es pub/sub, no una cola.
+    It survives Redis going down: local delivery keeps working, user sockets
+    are not closed, and the process resubscribes by itself when Redis comes
+    back. Whatever is published while it is down is lost -- this is pub/sub,
+    not a queue.
     """
 
-    ESPERA_MAX = 10.0          # tope del backoff al reconectar
-    LATIDO = 15.0              # health check de redis-py, en segundos
+    MAX_BACKOFF = 10.0          # backoff ceiling when reconnecting
+    HEARTBEAT = 15.0              # health check de redis-py, en segundos
 
     def __init__(self, url: str = "redis://localhost:6379/0", prefix: str = "djws"):
         super().__init__()
@@ -110,22 +110,22 @@ class RedisLayer(MemoryLayer):
         self._redis = None
         self._pubsub = None
         self._listener: asyncio.Task | None = None
-        self._conectado = False
-        # Identifica a este proceso para no entregar dos veces lo que ya
-        # entregamos localmente.
+        self._running = False
+        # Identifies this process so we don't deliver twice what we already
+        # delivered locally.
         self._origin = f"{id(self)}"
 
-    def _conectar(self):
+    def _connect(self):
         """
-        Crea el cliente de Redis. Idempotente.
+        Create the Redis client. Idempotent.
 
-        Vive aparte de `startup()` porque hay procesos que solo publican -- un
-        worker de Celery, un cron, un management command -- y ahi nadie llama a
-        `startup()`: no hay conexiones websocket ni evento lifespan que lo
-        disparen. Sin esto, `send()` encontraba `_redis = None`, el publish
-        lanzaba AttributeError, el except lo enmascaraba como caida de Redis y
-        el mensaje se perdia en silencio. Justo el caso de la barra de progreso
-        de Celery, que es el mas buscado.
+        It lives apart from `startup()` because some processes only publish --
+        a Celery worker, a cron, a management command -- and nothing calls
+        `startup()` there: no websocket connections and no lifespan event to
+        trigger it. Without this, `send()` found `_redis = None`, the publish
+        raised AttributeError, the except masked it as a Redis outage, and the
+        message was silently dropped. Exactly the Celery progress-bar case,
+        which is the most sought-after one.
         """
         if self._redis is not None:
             return self._redis
@@ -133,26 +133,26 @@ class RedisLayer(MemoryLayer):
             import redis.asyncio as aioredis
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError(
-                "RedisLayer necesita el paquete 'redis'. Instalalo con:\n"
+                "RedisLayer needs the 'redis' package. Install it with:\n"
                 "  pip install redis"
             ) from exc
         self._redis = aioredis.from_url(
             self.url,
-            health_check_interval=self.LATIDO,   # sin esto no detecta la caida
+            health_check_interval=self.HEARTBEAT,   # without this it misses the outage
             retry_on_timeout=True,
         )
         return self._redis
 
     async def startup(self) -> None:
-        self._conectar()
+        self._connect()
         self._pubsub = self._redis.pubsub()
         await self._pubsub.subscribe(self.channel)
-        self._conectado = True
+        self._running = True
         self._listener = asyncio.create_task(self._listen())
-        logger.info("django_socket: RedisLayer conectada a %s", self.url)
+        logger.info("django_socket: RedisLayer connected to %s", self.url)
 
     async def shutdown(self) -> None:
-        self._conectado = False
+        self._running = False
         if self._listener:
             self._listener.cancel()
             try:
@@ -169,83 +169,83 @@ class RedisLayer(MemoryLayer):
             await self._redis.aclose()
 
     async def send(self, group: str, data: Any, *, exclude=None) -> None:
-        # Entrega local inmediata (asi `exclude` funciona por identidad)...
+        # Immediate local delivery (so `exclude` works by identity)...
         await self._deliver_local(group, data, exclude=exclude)
-        # ...y avisa al resto de procesos.
-        carga = json.dumps(
+        # ...and tell the other processes.
+        payload = json.dumps(
             {"group": group, "data": data, "origin": self._origin},
             default=str,
         )
         try:
-            # Conexion perezosa: un proceso que solo publica nunca paso por
-            # startup(), y antes eso hacia que el mensaje se perdiera callando.
-            redis = self._conectar()
+            # Lazy connection: a publisher-only process never went through
+            # startup(), and that used to drop the message silently.
+            redis = self._connect()
         except Exception as exc:
             logger.error(
-                "django_socket: no se pudo crear el cliente de Redis (%s: %s). "
-                "El grupo %r solo recibio la entrega local. Revisa REDIS_URL y "
-                "que el paquete 'redis' este instalado.",
+                "django_socket: could not create the Redis client (%s: %s). "
+                "Group %r only got local delivery. Check REDIS_URL and that "
+                "the 'redis' package is installed.",
                 type(exc).__name__, exc, group,
             )
             return
 
         try:
-            await redis.publish(self.channel, carga)
+            await redis.publish(self.channel, payload)
         except Exception as exc:
-            # Que Redis falle no puede tumbar la conexion del usuario: la
-            # entrega local ya se hizo y el handler debe seguir vivo. Se pierde
-            # el fan-out a los demas procesos, y por eso se loguea como error.
+            # Redis failing must not take the user's connection down: local
+            # delivery already happened and the handler has to stay alive. The
+            # fan-out to other processes is lost, hence the error log.
             logger.error(
-                "django_socket: no se pudo publicar en Redis (%s: %s). "
-                "El grupo %r solo recibio la entrega local.",
+                "django_socket: could not publish to Redis (%s: %s). "
+                "Group %r only got local delivery.",
                 type(exc).__name__, exc, group,
             )
 
     async def _listen(self) -> None:
         """
-        Bucle de escucha resistente.
+        A resilient listening loop.
 
-        Se usa `get_message(timeout=...)` en vez de `listen()` para tener un
-        despertar periodico: ahi es donde redis-py corre su health check y
-        donde podemos detectar que la conexion se fue. Con `listen()` a secas
-        el proceso se queda sordo para siempre tras una caida.
+        `get_message(timeout=...)` is used instead of `listen()` to get a
+        periodic wake-up: that is where redis-py runs its health check and
+        where we can notice the connection is gone. With a bare `listen()` the
+        process goes deaf forever after an outage.
         """
-        espera = 0.5
+        retry_after = 0.5
         while True:
             try:
-                mensaje = await self._pubsub.get_message(
+                message = await self._pubsub.get_message(
                     ignore_subscribe_messages=True, timeout=1.0
                 )
-                espera = 0.5                      # todo bien, resetea el backoff
-                if mensaje is not None and mensaje.get("type") == "message":
-                    await self._entregar(mensaje)
+                retry_after = 0.5                      # all good, reset the backoff
+                if message is not None and message.get("type") == "message":
+                    await self._dispatch_payload(message)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                if not self._conectado:
+                if not self._running:
                     return
                 logger.warning(
-                    "django_socket: se perdio la conexion con Redis (%s). "
-                    "Reintentando en %.1fs.", type(exc).__name__, espera,
+                    "django_socket: lost the connection to Redis (%s). "
+                    "Retrying in %.1fs.", type(exc).__name__, retry_after,
                 )
-                await asyncio.sleep(espera)
-                espera = min(espera * 2, self.ESPERA_MAX)
-                await self._resuscribir()
+                await asyncio.sleep(retry_after)
+                retry_after = min(retry_after * 2, self.MAX_BACKOFF)
+                await self._resubscribe()
 
-    async def _entregar(self, mensaje) -> None:
+    async def _dispatch_payload(self, message) -> None:
         try:
-            payload = json.loads(mensaje["data"])
+            payload = json.loads(message["data"])
         except (ValueError, KeyError, TypeError):
-            logger.warning("django_socket: mensaje ilegible en %s", self.channel)
+            logger.warning("django_socket: unreadable message on %s", self.channel)
             return
         if payload.get("origin") == self._origin:
-            return  # ya lo entregamos localmente
+            return  # we already delivered it locally
         await self._deliver_local(payload["group"], payload["data"])
 
-    async def _resuscribir(self) -> None:
-        """Vuelve a suscribirse tras un corte.
+    async def _resubscribe(self) -> None:
+        """Subscribe again after an outage.
 
-        Si Redis sigue caido, lo dira el bucle en la siguiente vuelta.
+        If Redis is still down, the loop will say so on the next pass.
         """
         try:
             await self._pubsub.aclose()
@@ -253,10 +253,10 @@ class RedisLayer(MemoryLayer):
             pass
         self._pubsub = self._redis.pubsub()
         await self._pubsub.subscribe(self.channel)
-        logger.info("django_socket: resuscrito a %s", self.channel)
+        logger.info("django_socket: resubscribed to %s", self.channel)
 
 
-# --------------------------------------------------------------- layer global
+# ---------------------------------------------------------------- global layer
 
 _layer: BaseLayer | None = None
 
@@ -288,34 +288,37 @@ def _build_layer() -> BaseLayer:
     if callable(backend):
         return backend()
     raise ValueError(
-        f"DJANGO_SOCKET['LAYER'] invalido: {backend!r}. Usa 'memory', 'redis' "
-        f"o un callable que devuelva una BaseLayer."
+        f"Invalid DJANGO_SOCKET['LAYER']: {backend!r}. Use 'memory', 'redis', "
+        f"or a callable returning a BaseLayer."
     )
 
 
-# ------------------------------------------------------------- API de usuario
+# ------------------------------------------------------------------ public API
 
 
 async def broadcast(data: Any, *, to: str) -> None:
     """
-    Envia a todos los miembros de un grupo, desde fuera de un handler.
+    Send to every member of a group, from outside a handler.
 
-        await broadcast({"aviso": "mantenimiento"}, to="room:1")
+        await broadcast({"notice": "maintenance"}, to="room:1")
     """
     await get_layer().send(to, data)
 
 
 async def group_size(group: str) -> int:
-    """Cuantos sockets locales hay en el grupo."""
+    """How many sockets of *this process* are in the group.
+
+    Under the Redis layer this does NOT count members on other workers.
+    """
     return await get_layer().size(group)
 
 
 def broadcast_sync(data: Any, *, to: str) -> None:
     """
-    Igual que `broadcast`, para vistas sincronas, señales o tareas Celery.
+    Same as `broadcast`, for sync views, signals or Celery tasks.
 
-    Con la capa 'memory' solo alcanza a los sockets del mismo proceso; para
-    llegar a todos los workers necesitas LAYER='redis'.
+    With the 'memory' layer it only reaches sockets in the same process; to
+    reach every worker you need LAYER='redis'.
     """
     from asgiref.sync import async_to_sync
 

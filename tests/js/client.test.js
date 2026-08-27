@@ -192,13 +192,18 @@ test("un corte de red (1006) si se reintenta", () => {
   mock.timers.reset();
 });
 
-test("esDefinitivo clasifica los codigos", () => {
+test("isFinal clasifica los codigos", () => {
   for (const c of [1000, 1008, 4000, 4401, 4999]) {
-    assert.equal(djangoSocket.esDefinitivo(c), true, `${c} deberia ser definitivo`);
+    assert.equal(djangoSocket.isFinal(c), true, `${c} deberia ser definitivo`);
   }
   for (const c of [1001, 1006, 1011, 1012, 3000, 5000]) {
-    assert.equal(djangoSocket.esDefinitivo(c), false, `${c} deberia reintentarse`);
+    assert.equal(djangoSocket.isFinal(c), false, `${c} deberia reintentarse`);
   }
+});
+
+test("esDefinitivo sigue siendo un alias de isFinal (0.2.x)", () => {
+  assert.equal(djangoSocket.esDefinitivo, djangoSocket.isFinal);
+  assert.equal(djangoSocket.esDefinitivo(4401), true);
 });
 
 test("shouldReconnect manda sobre el criterio por defecto", () => {

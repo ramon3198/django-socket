@@ -1,7 +1,7 @@
-"""Compatibilidad. La implementacion vive ahora en `authentication.py`.
+"""Compatibility. The implementation now lives in `authentication.py`.
 
-Se mantiene porque `django_socket.auth` existia en 0.1.0 y alguien pudo
-importarlo. Lo nuevo (autenticadores conectables, token) esta en
+Kept because `django_socket.auth` existed in 0.1.0 and somebody may have
+imported it. The newer parts (pluggable authenticators, token) are in
 `django_socket.authentication`.
 """
 

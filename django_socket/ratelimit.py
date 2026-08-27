@@ -1,16 +1,15 @@
-"""Limite de mensajes entrantes por socket.
+"""Incoming-message rate limiting, per socket.
 
-    DJANGO_SOCKET = {"RATE_LIMIT": "60/m"}      # para todas las rutas
-    @ws("chat/", rate_limit="10/s")             # o solo para esta
+    DJANGO_SOCKET = {"RATE_LIMIT": "60/m"}      # every route
+    @ws("chat/", rate_limit="10/s")             # or just this one
 
-Es un *token bucket*, no un contador por ventana, y la diferencia importa: un
-contador rechaza el mensaje 11 aunque los 10 anteriores fueran de hace 59
-segundos. El cubo se rellena de forma continua, asi que aguanta la rafaga
-normal de alguien escribiendo rapido y solo corta cuando el ritmo *sostenido*
-pasa del limite.
+It is a *token bucket*, not a per-window counter, and the difference is what
+makes it usable: a counter rejects message 11 even when the previous 10 were 59
+seconds ago. The bucket refills continuously, so it absorbs the normal burst of
+someone typing fast and only cuts when the *sustained* rate goes over.
 
-Al agotarse se cierra con **4429**. Para dejar pasar picos mas grandes, sube el
-`burst`:
+Running out closes the connection with **4429**. To let bigger spikes through,
+raise the burst without raising the sustained rate:
 
     @ws("cursor/", rate_limit="30/s", burst=100)
 """
@@ -20,66 +19,66 @@ from __future__ import annotations
 import re
 import time
 
-UNIDADES = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}
-_FORMATO = re.compile(r"^\s*(\d+)\s*/\s*(\d*)\s*([smhd])\s*$", re.I)
+UNITS = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}
+_FORMAT = re.compile(r"^\s*(\d+)\s*/\s*(\d*)\s*([smhd])\s*$", re.I)
 
 CLOSE_RATE_LIMIT = 4429
 
 
-def parsear(spec: str) -> tuple[float, float]:
+def parse_rate(spec: str) -> tuple[float, float]:
     """
-    "60/m" -> (60 mensajes, 60 segundos).  Tambien "100/5m", "10/s".
+    ``"60/m"`` -> ``(60 messages, 60 seconds)``. Also ``"100/5m"``, ``"10/s"``.
 
-    Devuelve (cantidad, periodo_en_segundos).
+    Returns ``(amount, period_in_seconds)``.
     """
     if not isinstance(spec, str):
-        raise ValueError(f"rate_limit debe ser una cadena como '60/m', no {spec!r}")
+        raise ValueError(f"rate_limit must be a string like '60/m', not {spec!r}")
 
-    m = _FORMATO.match(spec)
+    m = _FORMAT.match(spec)
     if not m:
         raise ValueError(
-            f"rate_limit invalido: {spec!r}. El formato es "
-            f"'<cantidad>/<periodo>', por ejemplo '60/m', '10/s' o '100/5m'."
+            f"Invalid rate_limit: {spec!r}. The format is '<amount>/<period>', "
+            f"for example '60/m', '10/s' or '100/5m'."
         )
 
-    cantidad, multiplo, unidad = m.groups()
-    if int(cantidad) <= 0:
-        raise ValueError(f"rate_limit invalido: {spec!r}. La cantidad debe ser > 0.")
-    return float(cantidad), float(multiplo or 1) * UNIDADES[unidad.lower()]
+    amount, multiple, unit = m.groups()
+    if int(amount) <= 0:
+        raise ValueError(f"Invalid rate_limit: {spec!r}. The amount must be > 0.")
+    return float(amount), float(multiple or 1) * UNITS[unit.lower()]
 
 
-class Cubo:
-    """Token bucket. `consumir()` devuelve False cuando ya no queda margen."""
+class TokenBucket:
+    """A token bucket. `consume()` returns False once there is no room left."""
 
-    __slots__ = ("capacidad", "por_segundo", "restante", "sello")
+    __slots__ = ("capacity", "per_second", "remaining", "stamp")
 
-    def __init__(self, cantidad: float, periodo: float, burst: float | None = None):
-        self.capacidad = float(burst if burst is not None else cantidad)
-        self.por_segundo = cantidad / periodo
-        self.restante = self.capacidad
-        self.sello = time.monotonic()
+    def __init__(self, amount: float, period: float, burst: float | None = None):
+        self.capacity = float(burst if burst is not None else amount)
+        self.per_second = amount / period
+        self.remaining = self.capacity
+        self.stamp = time.monotonic()
 
-    def consumir(self, coste: float = 1.0) -> bool:
-        ahora = time.monotonic()
-        self.restante = min(
-            self.capacidad, self.restante + (ahora - self.sello) * self.por_segundo
+    def consume(self, cost: float = 1.0) -> bool:
+        now = time.monotonic()
+        self.remaining = min(
+            self.capacity, self.remaining + (now - self.stamp) * self.per_second
         )
-        self.sello = ahora
-        if self.restante < coste:
+        self.stamp = now
+        if self.remaining < cost:
             return False
-        self.restante -= coste
+        self.remaining -= cost
         return True
 
     @property
-    def espera(self) -> float:
-        """Segundos hasta que vuelva a haber margen. Util para avisar al cliente."""
-        if self.restante >= 1:
+    def retry_after(self) -> float:
+        """Seconds until there is room again. Useful to tell the client."""
+        if self.remaining >= 1:
             return 0.0
-        return (1 - self.restante) / self.por_segundo
+        return (1 - self.remaining) / self.per_second
 
 
-def crear(spec=None, burst=None) -> Cubo | None:
-    """Cubo para una ruta, o None si no hay limite configurado en ningun sitio."""
+def make_bucket(spec=None, burst=None) -> TokenBucket | None:
+    """A bucket for one route, or None if no limit is configured anywhere."""
     if spec is None:
         from django.conf import settings
 
@@ -89,5 +88,5 @@ def crear(spec=None, burst=None) -> Cubo | None:
 
     if not spec:
         return None
-    cantidad, periodo = parsear(spec)
-    return Cubo(cantidad, periodo, burst)
+    amount, period = parse_rate(spec)
+    return TokenBucket(amount, period, burst)

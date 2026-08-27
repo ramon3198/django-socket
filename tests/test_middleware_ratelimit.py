@@ -5,8 +5,8 @@ import pytest
 from django.test import override_settings
 
 from django_socket import ws
-from django_socket.middleware import max_conexiones_por_usuario, registrar
-from django_socket.ratelimit import CLOSE_RATE_LIMIT, Cubo, parsear
+from django_socket.middleware import log_connections, max_connections_per_user
+from django_socket.ratelimit import CLOSE_RATE_LIMIT, TokenBucket, parse_rate
 from django_socket.testing import WebSocketClient
 
 # ---------------------------------------------------------------- middleware
@@ -15,9 +15,9 @@ from django_socket.testing import WebSocketClient
 async def test_envuelve_el_handler():
     orden = []
 
-    async def fuera(sock, siguiente):
+    async def fuera(sock, next_):
         orden.append("fuera:antes")
-        await siguiente()
+        await next_()
         orden.append("fuera:despues")
 
     @ws("x/", auth=False)
@@ -36,9 +36,9 @@ async def test_el_primero_de_la_lista_es_el_mas_externo():
     orden = []
 
     def hacer(nombre):
-        async def mw(sock, siguiente):
+        async def mw(sock, next_):
             orden.append(f"{nombre}:entra")
-            await siguiente()
+            await next_()
             orden.append(f"{nombre}:sale")
         mw.__name__ = nombre
         return mw
@@ -57,9 +57,9 @@ async def test_el_primero_de_la_lista_es_el_mas_externo():
 async def test_puede_cortar_la_conexion():
     llamado = []
 
-    async def portero(sock, siguiente):
+    async def portero(sock, next_):
         await sock.close(4403, "Nope")
-        # sin llamar a siguiente(): el handler no debe correr
+        # sin llamar a next_(): el handler no debe correr
 
     @ws("x/", auth=False)
     async def handler(sock):
@@ -76,9 +76,9 @@ async def test_ve_el_usuario_ya_resuelto(transporte):
     """El middleware corre despues de autenticar, para poder decidir con eso."""
     visto = {}
 
-    async def mira(sock, siguiente):
+    async def mira(sock, next_):
         visto["auth"] = sock.user.is_authenticated
-        await siguiente()
+        await next_()
 
     @ws("x/")
     async def handler(sock): ...
@@ -91,7 +91,7 @@ async def test_ve_el_usuario_ya_resuelto(transporte):
 
 
 async def test_un_fallo_del_middleware_se_trata_como_uno_del_handler(caplog):
-    async def revienta(sock, siguiente):
+    async def revienta(sock, next_):
         raise RuntimeError("bug en el middleware")
 
     @ws("x/", auth=False)
@@ -107,9 +107,9 @@ async def test_el_finally_del_middleware_corre_aunque_el_cliente_se_vaya():
     """Es donde va la metrica de duracion: tiene que cerrarse siempre."""
     cerrados = []
 
-    async def medir(sock, siguiente):
+    async def medir(sock, next_):
         try:
-            await siguiente()
+            await next_()
         finally:
             cerrados.append(sock.path)
 
@@ -144,7 +144,7 @@ async def test_max_conexiones_por_usuario():
         async for _ in sock:
             pass
 
-    with override_settings(DJANGO_SOCKET={"MIDDLEWARE": [max_conexiones_por_usuario(2)]}):
+    with override_settings(DJANGO_SOCKET={"MIDDLEWARE": [max_connections_per_user(2)]}):
         a = await WebSocketClient("/x/").connect()
         b = await WebSocketClient("/x/").connect()
         c = await WebSocketClient("/x/").connect()
@@ -159,7 +159,7 @@ async def test_max_conexiones_por_usuario():
         await d.disconnect()
 
 
-async def test_registrar_deja_una_linea_por_conexion(caplog):
+async def test_log_connections_deja_una_linea_por_conexion(caplog):
     import logging
 
     caplog.set_level(logging.INFO, logger="django_socket.access")
@@ -167,7 +167,7 @@ async def test_registrar_deja_una_linea_por_conexion(caplog):
     @ws("x/", auth=False)
     async def handler(sock): ...
 
-    with override_settings(DJANGO_SOCKET={"MIDDLEWARE": [registrar()]}):
+    with override_settings(DJANGO_SOCKET={"MIDDLEWARE": [log_connections()]}):
         async with WebSocketClient("/x/"):
             pass
 
@@ -189,24 +189,24 @@ async def test_registrar_deja_una_linea_por_conexion(caplog):
     ],
 )
 def test_parsear(spec, esperado):
-    assert parsear(spec) == esperado
+    assert parse_rate(spec) == esperado
 
 
 @pytest.mark.parametrize("spec", ["60", "60/x", "abc", "", "-5/m", 60])
 def test_un_formato_invalido_muestra_el_formato_bueno(spec):
     with pytest.raises(ValueError) as exc:
-        parsear(spec)
+        parse_rate(spec)
     assert "60/m" in str(exc.value), "el error deberia enseñar un ejemplo valido"
 
 
 def test_una_cantidad_de_cero_dice_exactamente_eso():
     """El formato es correcto; el problema es el numero. Dilo asi."""
     with pytest.raises(ValueError) as exc:
-        parsear("0/s")
+        parse_rate("0/s")
     assert "> 0" in str(exc.value)
 
 
-def test_una_ruta_con_rate_limit_malo_falla_al_registrar():
+def test_una_ruta_con_rate_limit_malo_falla_al_registrarse():
     with pytest.raises(ValueError):
         @ws("y/", rate_limit="esto no vale")
         async def handler(sock): ...
@@ -216,9 +216,9 @@ def test_una_ruta_con_rate_limit_malo_falla_al_registrar():
 
 
 def test_el_cubo_deja_pasar_hasta_la_capacidad():
-    cubo = Cubo(5, 60)
-    assert all(cubo.consumir() for _ in range(5))
-    assert not cubo.consumir()
+    bucket = TokenBucket(5, 60)
+    assert all(bucket.consume() for _ in range(5))
+    assert not bucket.consume()
 
 
 def test_el_cubo_se_rellena_con_el_tiempo():
@@ -226,25 +226,25 @@ def test_el_cubo_se_rellena_con_el_tiempo():
     Lo que lo distingue de un contador por ventana: no espera al corte del
     minuto, va reponiendo.
     """
-    cubo = Cubo(10, 1)          # 10/s
+    bucket = TokenBucket(10, 1)          # 10/s
     for _ in range(10):
-        cubo.consumir()
-    assert not cubo.consumir()
+        bucket.consume()
+    assert not bucket.consume()
 
-    cubo.sello -= 0.5           # como si hubiera pasado medio segundo
-    assert cubo.consumir(), "medio segundo deberia reponer ~5"
+    bucket.stamp -= 0.5           # como si hubiera pasado medio segundo
+    assert bucket.consume(), "medio segundo deberia reponer ~5"
 
 
 def test_burst_permite_un_pico_sin_subir_el_ritmo():
-    cubo = Cubo(10, 1, burst=50)
-    assert sum(cubo.consumir() for _ in range(50)) == 50
-    assert not cubo.consumir()
+    bucket = TokenBucket(10, 1, burst=50)
+    assert sum(bucket.consume() for _ in range(50)) == 50
+    assert not bucket.consume()
 
 
 def test_el_cubo_dice_cuanto_esperar():
-    cubo = Cubo(1, 10)          # 1 cada 10s
-    cubo.consumir()
-    assert 9 <= cubo.espera <= 10
+    bucket = TokenBucket(1, 10)          # 1 cada 10s
+    bucket.consume()
+    assert 9 <= bucket.retry_after <= 10
 
 
 # --------------------------------------------------- de punta a punta

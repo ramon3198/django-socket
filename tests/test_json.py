@@ -46,7 +46,7 @@ async def test_tipos_de_django_se_serializan_solos(transporte, valor, esperado):
 async def test_la_fecha_sale_en_iso_no_en_str(transporte):
     """
     ISO-8601 es el unico formato que la spec de ECMAScript obliga a `Date` a
-    parsear; el de str() depende del motor (V8 lo acepta, otros no siempre).
+    parse_rate; el de str() depende del motor (V8 lo acepta, otros no siempre).
     """
     sock, t = nuevo(transporte)
     await sock.send_json({"cuando": datetime(2026, 8, 26, 10, 30)})
@@ -120,7 +120,7 @@ def test_invalid_json_recorta_el_frame_en_el_mensaje():
     with pytest.raises(InvalidJSON) as exc:
         Message(text="x" * 500).json()
     assert len(str(exc.value)) < 160
-    assert exc.value.crudo == "x" * 500      # el original sigue disponible
+    assert exc.value.raw == "x" * 500      # el original sigue disponible
 
 
 def test_bytes_que_no_son_utf8():
@@ -146,7 +146,7 @@ async def test_json_invalido_cierra_con_4400_y_no_con_1011(transporte, caplog):
     assert t.cierre["code"] == CLOSE_BAD_DATA
     assert t.cierre["reason"] == "Invalid JSON"
     assert "Traceback" not in caplog.text
-    assert "JSON invalido del cliente" in caplog.text
+    assert "Invalid JSON from the client" in caplog.text
 
 
 async def test_un_error_del_servidor_sigue_siendo_1011(transporte):
@@ -250,7 +250,7 @@ async def test_tipo_desconocido_se_ignora_por_defecto(transporte, caplog):
 
     sock, _ = nuevo(transporte)
     await ev.handle(sock, {"type": "otro"})     # no debe lanzar
-    assert "nadie maneja" in caplog.text
+    assert "nothing handles" in caplog.text
     assert "solo-este" in caplog.text   # dice cuales SI hay
 
 
@@ -309,7 +309,7 @@ def test_varios_tipos_en_un_decorador():
     @ev.on("entrar", "salir")
     async def mover(sock, datos): ...
 
-    assert ev.tipos == ["entrar", "salir"]
+    assert ev.types == ["entrar", "salir"]
 
 
 def test_handler_sincrono_se_rechaza():
@@ -320,12 +320,12 @@ def test_handler_sincrono_se_rechaza():
     assert "async def" in str(exc.value)
 
 
-def test_firma_rara_se_rechaza_al_registrar():
+def test_firma_rara_se_rechaza_al_registrarse():
     ev = Events()
     with pytest.raises(TypeError) as exc:
         @ev.on("x")
         async def demasiados(sock, datos, extra): ...
-    assert "(sock, datos)" in str(exc.value)
+    assert "(sock, data)" in str(exc.value)
 
 
 def test_on_sin_tipos_se_rechaza():

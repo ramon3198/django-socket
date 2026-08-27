@@ -4,7 +4,7 @@ import pytest
 
 from django_socket import Events, login_required, ws
 from django_socket.testing import (
-    TimeoutDelEsperado,
+    ReceiveTimeout,
     WebSocketClient,
     WebSocketDisconnect,
 )
@@ -223,7 +223,7 @@ async def test_el_timeout_falla_rapido_en_vez_de_colgarse():
             pass
 
     async with WebSocketClient("/mudo/") as c:
-        with pytest.raises(TimeoutDelEsperado) as exc:
+        with pytest.raises(ReceiveTimeout) as exc:
             await c.receive(timeout=0.05)
         assert "/mudo/" in str(exc.value)
 

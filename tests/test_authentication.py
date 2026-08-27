@@ -3,16 +3,16 @@
 import pytest
 from django.test import override_settings
 
-from django_socket import dispatch, extraer_token, ws
-from django_socket.authentication import _limpiar_cache_resolver, resolver_lista
+from django_socket import dispatch, extract_token, ws
+from django_socket.authentication import _clear_resolver_cache, resolve_authenticators
 from django_socket.testing import WebSocketClient
 
 
 @pytest.fixture(autouse=True)
 def resolver_limpio():
-    _limpiar_cache_resolver()
+    _clear_resolver_cache()
     yield
-    _limpiar_cache_resolver()
+    _clear_resolver_cache()
 
 
 async def correr(t):
@@ -34,27 +34,27 @@ def sock_falso(transporte, **kwargs):
 def test_del_subprotocolo(transporte):
     """La via recomendada en navegador: no se ve en la URL ni en los logs."""
     sock = sock_falso(transporte, subprotocols=["bearer", "abc123"])
-    assert extraer_token(sock) == "abc123"
+    assert extract_token(sock) == "abc123"
 
 
 def test_de_la_cabecera_authorization(transporte):
     """Para clientes nativos, que si pueden poner cabeceras."""
     sock = sock_falso(transporte, headers={"Authorization": "Bearer abc123"})
-    assert extraer_token(sock) == "abc123"
+    assert extract_token(sock) == "abc123"
 
 
 def test_el_esquema_no_distingue_mayusculas(transporte):
-    assert extraer_token(sock_falso(transporte, headers={"Authorization": "bearer x"})) == "x"
-    assert extraer_token(sock_falso(transporte, subprotocols=["Bearer", "y"])) == "y"
+    assert extract_token(sock_falso(transporte, headers={"Authorization": "bearer x"})) == "x"
+    assert extract_token(sock_falso(transporte, subprotocols=["Bearer", "y"])) == "y"
 
 
 def test_de_la_query(transporte):
     sock = sock_falso(transporte, query="token=abc123")
-    assert extraer_token(sock) == "abc123"
+    assert extract_token(sock) == "abc123"
 
 
 def test_sin_token_devuelve_none(transporte):
-    assert extraer_token(sock_falso(transporte)) is None
+    assert extract_token(sock_falso(transporte)) is None
 
 
 def test_el_subprotocolo_gana_a_la_query(transporte):
@@ -62,12 +62,12 @@ def test_el_subprotocolo_gana_a_la_query(transporte):
     sock = sock_falso(
         transporte, subprotocols=["bearer", "del-protocolo"], query="token=de-la-query"
     )
-    assert extraer_token(sock) == "del-protocolo"
+    assert extract_token(sock) == "del-protocolo"
 
 
 def test_un_subprotocolo_normal_no_se_confunde_con_un_token(transporte):
     sock = sock_falso(transporte, subprotocols=["graphql-ws"])
-    assert extraer_token(sock) is None
+    assert extract_token(sock) is None
 
 
 # ------------------------------------------------------- resolver del token
@@ -230,7 +230,7 @@ async def test_uno_que_falla_no_impide_que_pruebe_el_siguiente(caplog):
 # ------------------------------------------------------------- validaciones
 
 
-def test_un_autenticador_inventado_falla_al_registrar():
+def test_un_autenticador_inventado_falla_al_registrarse():
     """Falla al importar el modulo, no en la primera conexion de un usuario."""
     with pytest.raises(ValueError) as exc:
         @ws("x/", auth="no-existe-esto")
@@ -241,11 +241,11 @@ def test_un_autenticador_inventado_falla_al_registrar():
 
 
 def test_resolver_lista_normaliza_las_formas():
-    assert len(resolver_lista("token")) == 1
-    assert len(resolver_lista(["session", "token"])) == 2
-    assert len(resolver_lista(por_cabecera_propia)) == 1
+    assert len(resolve_authenticators("token")) == 1
+    assert len(resolve_authenticators(["session", "token"])) == 2
+    assert len(resolve_authenticators(por_cabecera_propia)) == 1
 
 
 @override_settings(DJANGO_SOCKET={"AUTH": ["session", "token"]})
 def test_true_significa_lo_que_diga_settings():
-    assert len(resolver_lista(True)) == 2
+    assert len(resolve_authenticators(True)) == 2

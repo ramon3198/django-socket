@@ -1,4 +1,4 @@
-"""Registro y resolucion de rutas WebSocket."""
+"""Route registry and resolution for WebSocket endpoints."""
 
 from __future__ import annotations
 
@@ -33,64 +33,64 @@ def ws(
     name: str | None = None,
 ):
     """
-    Registra un handler WebSocket.
+    Register a WebSocket handler.
 
         @ws("chat/<str:room>/", group="room:{room}")
         async def chat(sock, room):
             async for msg in sock:
                 await sock.broadcast(msg.text)
 
-    `route` usa la sintaxis de `django.urls.path` y sus mismos conversores
-    (`<int:pk>`, `<slug:x>`, `<uuid:x>`...), asi que los parametros llegan al
-    handler ya convertidos.
+    `route` uses `django.urls.path` syntax and its converters (`<int:pk>`,
+    `<slug:x>`, `<uuid:x>`...), so parameters reach the handler already
+    converted.
 
-    `group` se rellena con esos mismos parametros: el socket entra en el grupo
-    al conectar, sale al desconectar, y `sock.broadcast(dato)` va ahi por
-    defecto.
+    `group` is filled in from those same parameters: the socket joins on
+    connect, leaves on disconnect, and `sock.broadcast(data)` goes there by
+    default.
 
-    `auth` decide como se resuelve `sock.user`:
+    `auth` decides how `sock.user` is resolved:
 
-        auth=True                  los autenticadores de settings (por defecto,
-                                   la sesion de Django)
-        auth=False                 ninguno; `sock.user` queda a None
-        auth="token"               solo por token
-        auth=["session", "token"]  el primero que reconozca a alguien
-        auth=mi_funcion            async(sock) -> user | None
+        auth=True                  the authenticators from settings (by
+                                   default, the Django session)
+        auth=False                 none; `sock.user` stays None
+        auth="token"               token only
+        auth=["session", "token"]  the first one that recognises anybody
+        auth=my_function           async(sock) -> user | None
 
-    Ver `django_socket.authentication`.
+    See `django_socket.authentication`.
 
-    `rate_limit` acota los mensajes entrantes de cada socket ("60/m", "10/s").
-    Al pasarse se cierra con 4429. `burst` deja pasar picos mayores sin subir
-    el ritmo sostenido. Ver `django_socket.ratelimit`.
+    `rate_limit` caps incoming messages per socket ("60/m", "10/s"). Going
+    over closes with 4429. `burst` lets spikes through without raising the
+    sustained rate. See `django_socket.ratelimit`.
     """
 
     def decorator(handler: Callable) -> Callable:
         if not inspect.iscoroutinefunction(handler):
             raise TypeError(
-                f"@ws espera 'async def', y {handler.__name__} es una funcion "
-                f"normal.\n"
+                f"@ws expects 'async def', and {handler.__name__} is a plain "
+                f"function.\n"
                 f"    async def {handler.__name__}(sock, ...):\n"
-                f"Un WebSocket vive en el loop de eventos. Para tocar el ORM "
-                f"usa su API async (await Model.objects.aget(...)) o envuelve "
-                f"lo sincrono en asgiref.sync.sync_to_async."
+                f"A WebSocket lives on the event loop. For the ORM use its "
+                f"async API (await Model.objects.aget(...)) or wrap the sync "
+                f"call in asgiref.sync.sync_to_async."
             )
         normalized = route.lstrip("/")
         _check_group_template(group, normalized, handler)
         if auth is not False:
-            # Falla al importar si el autenticador no existe, no en la primera
-            # conexion del primer usuario.
-            from .authentication import resolver_lista
+            # Fail at import time if the authenticator does not exist, not on
+            # the first user's first connection.
+            from .authentication import resolve_authenticators
 
-            resolver_lista(auth)
+            resolve_authenticators(auth)
         if rate_limit is not None:
-            from .ratelimit import parsear
+            from .ratelimit import parse_rate
 
-            parsear(rate_limit)     # revienta ahora si el formato esta mal
+            parse_rate(rate_limit)     # blow up now if the format is wrong
 
         for existing in _routes:
             if existing.route == normalized:
                 raise ValueError(
-                    f"La ruta '{normalized}' ya la tiene registrada "
+                    f"Route '{normalized}' is already registered by "
                     f"{existing.handler.__module__}.{existing.handler.__name__}."
                 )
 
@@ -112,7 +112,7 @@ def ws(
 
 
 def _check_group_template(group: str | None, route: str, handler: Callable) -> None:
-    """Falla al importar, no en la primera conexion, si el grupo no cuadra."""
+    """Fail at import time, not on the first connection, if the group is wrong."""
     if not group:
         return
     referenced = {
@@ -122,14 +122,14 @@ def _check_group_template(group: str | None, route: str, handler: Callable) -> N
     missing = referenced - available
     if missing:
         raise ValueError(
-            f"group={group!r} en {handler.__name__} usa "
-            f"{sorted(missing)}, que no existe(n) en la ruta '{route}'. "
-            f"Disponibles: {sorted(available) or 'ninguno'}."
+            f"group={group!r} on {handler.__name__} uses "
+            f"{sorted(missing)}, which route '{route}' does not have. "
+            f"Available: {sorted(available) or 'none'}."
         )
 
 
 def resolve(path: str) -> tuple[Route, dict[str, Any]] | None:
-    """Devuelve (ruta, kwargs) para un path ASGI, o None si no casa ninguna."""
+    """Return (route, kwargs) for an ASGI path, or None if nothing matches."""
     candidate = path.lstrip("/")
     for r in _routes:
         match = r.pattern.match(candidate)
@@ -144,5 +144,5 @@ def get_routes() -> list[Route]:
 
 
 def clear_routes() -> None:
-    """Solo para tests."""
+    """Tests only."""
     _routes.clear()

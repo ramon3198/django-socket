@@ -1,8 +1,8 @@
-"""El nucleo: atiende los scopes 'websocket' y 'lifespan'.
+"""The core: handles the 'websocket' and 'lifespan' scopes.
 
-Vive aparte de `asgi.py` porque hay dos caminos que llegan aqui: el parche
-sobre `ASGIHandler` (modo cero-configuracion) y `ASGIApplication` explicito.
-Los dos comparten este codigo.
+It lives apart from `asgi.py` because two paths lead here: the patch on
+`ASGIHandler` (the zero-configuration mode) and an explicit `ASGIApplication`.
+Both share this code.
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ from .websocket import InvalidJSON, RateLimited, WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger("django_socket")
 
-# Codigos de cierre propios (rango privado 4000-4999).
+# Our own close codes (private range 4000-4999).
 CLOSE_NO_ROUTE = 4404
-CLOSE_BAD_DATA = 4400      # el cliente mando algo que no se puede parsear
+CLOSE_BAD_DATA = 4400      # the client sent something unparseable
 CLOSE_SERVER_ERROR = 1011
 
 _layer_started = False
@@ -56,7 +56,7 @@ async def handle_lifespan(scope, receive, send) -> None:
             try:
                 await _start_layer()
             except Exception as exc:
-                logger.exception("django_socket: fallo en el arranque")
+                logger.exception("django_socket: startup failed")
                 await send({"type": "lifespan.startup.failed", "message": str(exc)})
                 return
             await send({"type": "lifespan.startup.complete"})
@@ -72,30 +72,30 @@ async def handle_lifespan(scope, receive, send) -> None:
 
 
 async def handle_websocket(scope, receive, send) -> None:
-    # El primer evento del protocolo siempre es websocket.connect.
+    # The protocol's first event is always websocket.connect.
     event = await receive()
     if event["type"] != "websocket.connect":
         return
 
-    await _start_layer()  # por si el servidor no soporta lifespan
+    await _start_layer()  # in case the server has no lifespan support
     sock = WebSocket(scope, receive, send, layer=groups.get_layer())
 
     if not origin_allowed(sock):
         logger.warning(
-            "django_socket: origen rechazado %r para %s",
+            "django_socket: rejected origin %r for %s",
             sock.headers.get("origin"),
             sock.path,
         )
-        # En seco: un origen ajeno no debe tener un socket abierto ni un instante.
+        # Flat out: a foreign origin must not hold an open socket for an instant.
         await sock.deny()
         return
 
     match = routing.resolve(sock.path)
     if match is None:
         logger.warning(
-            "django_socket: ninguna ruta casa con %s. Registradas: %s",
+            "django_socket: no route matches %s. Registered: %s",
             sock.path,
-            ", ".join(f"/{r.route}" for r in routing.get_routes()) or "(ninguna)",
+            ", ".join(f"/{r.route}" for r in routing.get_routes()) or "(none)",
         )
         await sock.close(CLOSE_NO_ROUTE, "No route")
         return
@@ -109,54 +109,56 @@ async def handle_websocket(scope, receive, send) -> None:
 
         from . import ratelimit
 
-        sock._rate = ratelimit.crear(route.rate_limit, route.burst)
+        sock._rate = ratelimit.make_bucket(route.rate_limit, route.burst)
 
-        async def ejecutar():
+        async def run_handler():
             if route.group:
-                # group="room:{room}" se rellena con los parametros de la ruta.
+                # group="room:{room}" is filled from the route parameters.
                 await sock.join(route.group.format(**kwargs))
             await route.handler(sock, **kwargs)
 
         try:
-            # El middleware va por fuera del handler pero por dentro de este
-            # try, para que un fallo suyo se trate igual que uno del handler.
-            await mw.aplicar(sock, ejecutar)
+            # Middleware sits outside the handler but inside this try, so a
+            # failure of its own is treated the same as one of the handler's.
+            await mw.apply(sock, run_handler)
         except WebSocketDisconnect:
-            pass  # el cliente se fue; salida normal
+            pass  # the client left; normal exit
         except RateLimited as exc:
             logger.warning(
-                "django_socket: %s va demasiado rapido en %s (%s)",
+                "django_socket: %s is going too fast on %s (%s)",
                 sock.client, sock.path, exc,
             )
-            await sock.close(exc.code, f"Rate limit; retry in {exc.espera:.0f}s")
+            await sock.close(exc.code, f"Rate limit; retry in {exc.retry_after:.0f}s")
             return
         except InvalidJSON as exc:
-            # Culpa del cliente, no del servidor: un aviso y un codigo que lo
-            # diga. Nada de traceback ni de 1011, que harian pensar que el bug
-            # es tuyo cada vez que alguien mande basura por el socket.
+            # The client's fault, not the server's: a warning and a code that
+            # says so. No traceback and no 1011, which would suggest the bug
+            # is yours every time someone sends garbage down the socket.
             logger.warning(
-                "django_socket: %s en %s (cliente %s)", exc, sock.path, sock.client
+                "django_socket: %s on %s (client %s)", exc, sock.path, sock.client
             )
             await sock.close(CLOSE_BAD_DATA, "Invalid JSON")
             return
         except Exception:
-            logger.exception("django_socket: excepcion en el handler de %s", sock.path)
+            logger.exception(
+                "django_socket: exception in the handler for %s", sock.path
+            )
             await sock.close(CLOSE_SERVER_ERROR, "Internal error")
             return
         await sock.close()
 
 
-# ------------------------------------------------------------------ origen
+# ------------------------------------------------------------------ origin
 
 
 def origin_allowed(sock) -> bool:
     """
-    Los WebSockets no estan sujetos a la politica de mismo origen: sin esta
-    comprobacion cualquier web podria abrir un socket autenticado contra la
-    tuya (cross-site WebSocket hijacking).
+    WebSockets are not subject to the same-origin policy: without this check
+    any website could open an authenticated socket against yours (cross-site
+    WebSocket hijacking).
 
-    Un Origin ausente se acepta: los navegadores siempre lo mandan, asi que
-    solo lo omiten clientes nativos. Ponlo estricto con REQUIRE_ORIGIN.
+    A missing Origin is accepted: browsers always send it, so only native
+    clients omit it. Make it strict with REQUIRE_ORIGIN.
     """
     from django.conf import settings
 
@@ -171,7 +173,7 @@ def origin_allowed(sock) -> bool:
             return True
         return origin in allowed or _host_of(origin) in allowed
 
-    # Por defecto: ALLOWED_HOSTS + CSRF_TRUSTED_ORIGINS, como hace Django.
+    # By default: ALLOWED_HOSTS + CSRF_TRUSTED_ORIGINS, like Django does.
     host = _host_of(origin)
     if not host:
         return False
@@ -189,7 +191,7 @@ def origin_allowed(sock) -> bool:
 
 
 def _host_of(origin: str) -> str:
-    """'https://ejemplo.com:8000' -> 'ejemplo.com'."""
+    """'https://example.com:8000' -> 'example.com'."""
     try:
         return (urlparse(origin).hostname or "").lower()
     except ValueError:
@@ -200,7 +202,7 @@ def _host_matches(host: str, pattern: str) -> bool:
     pattern = pattern.lower()
     if pattern == "*":
         return True
-    if pattern.startswith("."):  # ".ejemplo.com" cubre subdominios y el apex
+    if pattern.startswith("."):  # ".example.com" covers subdomains and the apex
         return host == pattern[1:] or host.endswith(pattern)
     if pattern.startswith("*."):
         return host == pattern[2:] or host.endswith(pattern[1:])

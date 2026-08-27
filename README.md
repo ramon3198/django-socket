@@ -112,14 +112,14 @@ python manage.py ws
 ```
 
 ```
-Rutas WebSocket
+WebSocket routes
   ws:///echo/                   myapp.sockets.echo
 
-Integracion
-  Capa de difusion      memory
-  asgi.py               no hace falta tocarlo (ASGIHandler ampliado)
-  Origenes permitidos   ALLOWED_HOSTS=[] (DEBUG: localhost)
-  Origin ausente        aceptado (clientes nativos)
+Integration
+  Broadcast layer       memory
+  asgi.py               nothing to do there (ASGIHandler widened)
+  Allowed origins       ALLOWED_HOSTS=[] (DEBUG)
+  Missing Origin        accepted (native clients)
 ```
 
 Run this first whenever something doesn't work: it tells you which routes exist,
@@ -619,15 +619,15 @@ async def paid_only(sock, next_):
 Two come included:
 
 ```python
-from django_socket.middleware import max_conexiones_por_usuario, registrar
+from django_socket.middleware import log_connections, max_connections_per_user
 
 DJANGO_SOCKET = {"MIDDLEWARE": [
-    max_conexiones_por_usuario(10),   # closes the 11th with 4429
-    registrar(),                      # one log line per connection
+    max_connections_per_user(10),   # closes the 11th with 4429
+    log_connections(),              # one log line per connection
 ]}
 ```
 
-`max_conexiones_por_usuario` counts per process: with N workers the real ceiling
+`max_connections_per_user` counts per process: with N workers the real ceiling
 is `limit × N`. A global one would need counters in Redis, which is only worth
 it if you actually need that precision.
 
@@ -835,7 +835,7 @@ sustained rate:
 ```
 
 The limit is per socket. It is not a defence against a botnet opening thousands
-of connections — for that you want `max_conexiones_por_usuario` and something in
+of connections — for that you want `max_connections_per_user` and something in
 front of the app.
 
 ---

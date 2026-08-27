@@ -1,8 +1,8 @@
-"""`manage.py runserver` sobre uvicorn, para que los WebSockets funcionen en dev.
+"""`manage.py runserver` on uvicorn, so WebSockets work in development.
 
-El runserver de Django es WSGI puro y rechaza el scope 'websocket'. Este
-comando reutiliza el parseo de argumentos de Django (addrport, --ipv6,
---noreload) y arranca uvicorn contra tu ASGI_APPLICATION.
+Django's runserver is pure WSGI and rejects the 'websocket' scope. This command
+reuses Django's own argument parsing (addrport, --ipv6, --noreload) and starts
+uvicorn against your ASGI_APPLICATION.
 """
 
 from __future__ import annotations
@@ -13,14 +13,14 @@ from django.core.management.commands.runserver import Command as RunserverComman
 
 
 class Command(RunserverCommand):
-    help = "Arranca un servidor de desarrollo ASGI (uvicorn) con soporte WebSocket."
+    help = "Run an ASGI development server (uvicorn) with WebSocket support."
 
     def add_arguments(self, parser):
         super().add_arguments(parser)
         parser.add_argument(
             "--log-level",
             default="info",
-            help="Nivel de log de uvicorn (error, warning, info, debug, trace).",
+            help="uvicorn log level (error, warning, info, debug, trace).",
         )
 
     def run(self, **options):
@@ -28,26 +28,26 @@ class Command(RunserverCommand):
             import uvicorn
         except ImportError as exc:
             raise CommandError(
-                "django_socket necesita uvicorn para el servidor de desarrollo.\n"
+                "django_socket needs uvicorn for the development server.\n"
                 "  pip install 'uvicorn[standard]'"
             ) from exc
 
-        app_path, is_factory, origen = self._import_string()
+        app_path, is_factory, source = self._import_string()
 
         from ... import routing
 
-        rutas = routing.get_routes()
+        routes = routing.get_routes()
         self.stdout.write(
             self.style.SUCCESS(
-                f"django_socket sobre uvicorn -- http://{self.addr}:{self.port}/"
+                f"django_socket on uvicorn -- http://{self.addr}:{self.port}/"
             )
         )
         self.stdout.write(
-            f"  {len(rutas)} ruta(s) websocket"
-            + (": " + ", ".join(f"/{r.route}" for r in rutas) if rutas else "")
+            f"  {len(routes)} websocket path(s)"
+            + (": " + ", ".join(f"/{r.route}" for r in routes) if routes else "")
         )
-        self.stdout.write(f"  app: {app_path}  ({origen})")
-        self.stdout.write("Ctrl-C para salir.\n")
+        self.stdout.write(f"  app: {app_path}  ({source})")
+        self.stdout.write("Ctrl-C to quit.\n")
 
         uvicorn.run(
             app_path,
@@ -56,26 +56,26 @@ class Command(RunserverCommand):
             port=int(self.port),
             reload=options["use_reloader"],
             log_level=options["log_level"],
-            # Django ya loguea las peticiones cuando DEBUG esta activo.
+            # Django already logs requests when DEBUG is on.
             access_log=True,
         )
 
     def _import_string(self) -> tuple[str, bool, str]:
         """
-        Devuelve (ruta_de_importacion, es_factory, de_donde_sale).
+        Return (import_path, is_factory, where_it_came_from).
 
-        Si el proyecto declara ASGI_APPLICATION la respetamos; si no, montamos
-        una al vuelo, para que la libreria funcione recien instalada sin pedir
-        ni una linea de configuracion.
+        If the project declares ASGI_APPLICATION we honour it; if not, we
+        build one on the fly, so the library works right after install
+        without asking for a single line of configuration.
         """
         path = getattr(settings, "ASGI_APPLICATION", None)
         if not path:
-            return "django_socket.asgi:factory", True, "generada al vuelo"
+            return "django_socket.asgi:factory", True, "built on the fly"
 
         module, _, attr = path.rpartition(".")
         if not module:
             raise CommandError(
-                f"ASGI_APPLICATION invalido: {path!r}. Deberia ser algo como "
-                f'"miproyecto.asgi.application".'
+                f"Invalid ASGI_APPLICATION: {path!r}. It should look like "
+                f'"myproject.asgi.application".'
             )
         return f"{module}:{attr}", False, "ASGI_APPLICATION"

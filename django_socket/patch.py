@@ -1,14 +1,14 @@
-"""Hace que el `asgi.py` que genera `startproject` sirva WebSockets sin tocarlo.
+"""Makes the `asgi.py` that `startproject` generates serve WebSockets untouched.
 
-`django.core.asgi.get_asgi_application()` devuelve un `ASGIHandler` que rechaza
-todo scope que no sea 'http' -- el propio codigo de Django lleva ahi un
-`# FIXME: Allow to override this.`. Como `django.setup()` ejecuta los `ready()`
-de las apps *antes* de instanciar el handler, desde nuestro `ready()` llegamos
-a tiempo de ensanchar esa puerta.
+`django.core.asgi.get_asgi_application()` returns an `ASGIHandler` that rejects
+any scope that is not 'http' -- Django's own code carries a
+`# FIXME: Allow to override this.` right there. Since `django.setup()` runs the
+apps' `ready()` *before* instantiating the handler, our `ready()` gets there in
+time to widen that door.
 
-El resultado es que integrar la libreria son dos pasos: instalarla y añadirla a
-INSTALLED_APPS. Desactivalo con DJANGO_SOCKET = {"PATCH_ASGI": False} si
-prefieres declarar `ASGIApplication()` a mano.
+The result is that integrating the library takes two steps: install it and add
+it to INSTALLED_APPS. Turn it off with DJANGO_SOCKET = {"PATCH_ASGI": False} if
+you would rather declare `ASGIApplication()` by hand.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ FLAG = "_django_socket_patched"
 
 
 def install() -> bool:
-    """Devuelve True si el parche quedo instalado (o ya lo estaba)."""
+    """True if the patch is installed (or already was)."""
     from django.core.handlers.asgi import ASGIHandler
 
     if getattr(ASGIHandler, FLAG, False):
@@ -44,7 +44,7 @@ def install() -> bool:
     __call__.__doc__ = ASGIHandler.__call__.__doc__
     ASGIHandler.__call__ = __call__
     setattr(ASGIHandler, FLAG, True)
-    logger.debug("django_socket: ASGIHandler ampliado con websocket + lifespan")
+    logger.debug("django_socket: ASGIHandler widened with websocket + lifespan")
     return True
 
 

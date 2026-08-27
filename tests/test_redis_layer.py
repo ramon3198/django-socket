@@ -245,19 +245,19 @@ async def test_send_no_tumba_el_handler_si_redis_falla(transporte, caplog):
     await sock.drain()
 
     assert t.textos[-1] == "sigue llegando en local"
-    assert "no se pudo publicar en Redis" in caplog.text
+    assert "could not publish to Redis" in caplog.text
 
 
 async def test_el_listener_se_resuscribe_tras_un_corte(monkeypatch, caplog):
     """Sin esto, un corte de Redis deja al proceso sordo para siempre."""
     capa = RedisLayer(url="redis://127.0.0.1:1/0")
-    capa._conectado = True
+    capa._running = True
     roto = PubSubFalso(fallos=1)
     capa._pubsub = roto
 
     nuevo = PubSubFalso(fallos=0)
     capa._redis = type("R", (), {"pubsub": lambda self: nuevo})()
-    monkeypatch.setattr(RedisLayer, "ESPERA_MAX", 0.01)
+    monkeypatch.setattr(RedisLayer, "MAX_BACKOFF", 0.01)
 
     tarea = asyncio.create_task(capa._listen())
     await asyncio.sleep(0.9)          # da tiempo al backoff inicial
@@ -267,14 +267,14 @@ async def test_el_listener_se_resuscribe_tras_un_corte(monkeypatch, caplog):
     except asyncio.CancelledError:
         pass
 
-    assert "se perdio la conexion con Redis" in caplog.text
+    assert "lost the connection to Redis" in caplog.text
     assert nuevo.suscripciones == [capa.channel], "no volvio a suscribirse"
 
 
 async def test_el_listener_sale_limpio_en_shutdown():
     """Al cerrar, un error de lectura no debe generar ruido ni reintentos."""
     capa = RedisLayer(url="redis://127.0.0.1:1/0")
-    capa._conectado = False           # como tras shutdown()
+    capa._running = False           # como tras shutdown()
     capa._pubsub = PubSubFalso(fallos=1)
 
     await asyncio.wait_for(capa._listen(), timeout=1.0)   # debe volver, no colgarse
@@ -282,8 +282,8 @@ async def test_el_listener_sale_limpio_en_shutdown():
 
 async def test_un_mensaje_corrupto_no_mata_el_listener(capas, caplog):
     a, _ = capas
-    await a._entregar({"data": b"esto no es json"})
-    assert "ilegible" in caplog.text
+    await a._dispatch_payload({"data": b"esto no es json"})
+    assert "unreadable" in caplog.text
 
 
 # ------------------------------------------- procesos que SOLO publican

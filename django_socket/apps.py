@@ -15,12 +15,12 @@ class DjangoSocketConfig(AppConfig):
         from django.utils.module_loading import autodiscover_modules
 
         from . import (
-            checks,  # noqa: F401  (se registran al importarse)
+            checks,  # noqa: F401  (registered on import)
             patch,
             routing,
         )
 
-        # Importa <cada_app>/sockets.py, igual que el admin con admin.py.
+        # Import <each_app>/sockets.py, the same way admin does with admin.py.
         autodiscover_modules("sockets")
 
         conf = getattr(settings, "DJANGO_SOCKET", {}) or {}
@@ -29,7 +29,7 @@ class DjangoSocketConfig(AppConfig):
 
         found = routing.get_routes()
         logger.debug(
-            "django_socket: %d ruta(s): %s",
+            "django_socket: %d path(s): %s",
             len(found),
-            ", ".join(f"/{r.route}" for r in found) or "(ninguna)",
+            ", ".join(f"/{r.route}" for r in found) or "(none)",
         )

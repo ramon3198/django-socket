@@ -112,14 +112,14 @@ python manage.py ws
 ```
 
 ```
-Rutas WebSocket
+WebSocket routes
   ws:///eco/                    miapp.sockets.eco
 
-Integracion
-  Capa de difusion      memory
-  asgi.py               no hace falta tocarlo (ASGIHandler ampliado)
-  Origenes permitidos   ALLOWED_HOSTS=[] (DEBUG: localhost)
-  Origin ausente        aceptado (clientes nativos)
+Integration
+  Broadcast layer       memory
+  asgi.py               nothing to do there (ASGIHandler widened)
+  Allowed origins       ALLOWED_HOSTS=[] (DEBUG)
+  Missing Origin        accepted (native clients)
 ```
 
 Este comando es lo primero que deberías ejecutar cuando algo no funcione: te
@@ -620,15 +620,15 @@ async def solo_de_pago(sock, siguiente):
 Vienen dos hechos:
 
 ```python
-from django_socket.middleware import max_conexiones_por_usuario, registrar
+from django_socket.middleware import log_connections, max_connections_per_user
 
 DJANGO_SOCKET = {"MIDDLEWARE": [
-    max_conexiones_por_usuario(10),   # cierra la 11ª con 4429
-    registrar(),                      # una línea de log por conexión
+    max_connections_per_user(10),   # cierra la 11ª con 4429
+    log_connections(),              # una línea de log por conexión
 ]}
 ```
 
-`max_conexiones_por_usuario` cuenta por proceso: con N workers el tope real es
+`max_connections_per_user` cuenta por proceso: con N workers el tope real es
 `límite × N`. Uno global necesitaría contadores en Redis, y eso solo compensa
 si de verdad necesitas esa precisión.
 
@@ -836,7 +836,7 @@ sostenido:
 ```
 
 El límite es por socket. **No** es una defensa contra una botnet abriendo miles
-de conexiones: para eso están `max_conexiones_por_usuario` y algo por delante
+de conexiones: para eso están `max_connections_per_user` y algo por delante
 de la aplicación.
 
 ---

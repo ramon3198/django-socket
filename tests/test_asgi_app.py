@@ -89,14 +89,14 @@ def test_runserver_se_apana_sin_asgi_application():
 
     assert ruta == "django_socket.asgi:factory"
     assert es_factory is True
-    assert "vuelo" in origen
+    assert "on the fly" in origen
 
 
 @override_settings(ASGI_APPLICATION="sinpuntos")
 def test_runserver_rechaza_un_asgi_application_invalido():
     with pytest.raises(CommandError) as exc:
         comando()._import_string()
-    assert "miproyecto.asgi.application" in str(exc.value)   # dice como deberia ser
+    assert "myproject.asgi.application" in str(exc.value)    # dice como deberia ser
 
 
 def test_la_factory_construye_una_app_valida(monkeypatch):
