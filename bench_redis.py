@@ -15,7 +15,6 @@ Mide tres cosas distintas que se confunden facil:
 import asyncio
 import os
 import statistics
-import sys
 import time
 
 import django

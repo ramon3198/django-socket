@@ -49,7 +49,9 @@ DJANGO_SOCKET = {
     # Por defecto "memory"; con varios workers hace falta "redis".
     #   DJANGO_SOCKET_LAYER=redis python manage.py runserver
     "LAYER": os.environ.get("DJANGO_SOCKET_LAYER", "memory"),
-    "REDIS_URL": os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0"),
+    "REDIS_URL": os.environ.get(
+        "REDIS_URL", "redis://127.0.0.1:6379/0"
+    ),
 }
 
 MIDDLEWARE = [

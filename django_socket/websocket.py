@@ -508,7 +508,7 @@ class WebSocket:
         self.close_code = code
         if self._writer is not None:
             self._writer.cancel()
-        asyncio.get_event_loop().create_task(self._cerrar_en_diferido(code, reason))
+        asyncio.get_running_loop().create_task(self._cerrar_en_diferido(code, reason))
 
     async def _cerrar_en_diferido(self, code: int, reason: str) -> None:
         try:

@@ -27,7 +27,10 @@ TIMEOUT = 1.0
 
 
 class TimeoutDelEsperado(AssertionError):
-    """No llego nada en el plazo. Es AssertionError para que lea como un fallo de test."""
+    """No llego nada en el plazo.
+
+    Es AssertionError para que lea como un fallo de test, no como un error.
+    """
 
 
 class WebSocketClient:
@@ -327,4 +330,9 @@ async def _crear_sesion(user) -> str:
     return sesion.session_key
 
 
-__all__ = ["WebSocketClient", "TimeoutDelEsperado", "WebSocketDisconnect", "InvalidJSON"]
+__all__ = [
+    "InvalidJSON",
+    "TimeoutDelEsperado",
+    "WebSocketClient",
+    "WebSocketDisconnect",
+]

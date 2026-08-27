@@ -33,7 +33,10 @@ from .websocket import (
     WebSocketDisconnect,
 )
 
-__version__ = "0.1.0"
+# Fuente de verdad de la version. `pyproject.toml` la lee de aqui con
+# `dynamic = ["version"]`, asi que no pueden divergir: antes se declaraban por
+# separado y el modulo se quedo en 0.1.0 mientras PyPI iba por 0.2.1.
+__version__ = "0.2.2"
 
 __all__ = [
     # Lo que usaras el 99% del tiempo

@@ -139,7 +139,11 @@
 
     function conectar() {
       clearTimeout(temporizador);
-      cerradoPorNosotros = false;
+      // Ojo: aqui NO se toca `cerradoPorNosotros`. Resetearlo al conectar
+      // resucitaba sockets que la aplicacion habia cerrado a proposito: si el
+      // cierre ocurria mientras esperabamos al evento "online", al volver la
+      // red el listener llamaba a conectar() y el flag se limpiaba solo.
+      // Quien decide reconectar es forzarReconexion(); ahi si se limpia.
       try {
         ws = o.protocols ? new WebSocket(url, o.protocols) : new WebSocket(url);
       } catch (err) {
@@ -214,30 +218,38 @@
     }
 
     var esperando = false;
+    var dejarDeEsperar = null;          // desmonta los listeners de la espera
 
     function esperarAEstarListo() {
       if (esperando) return;            // no acumules parejas de listeners
       esperando = true;
 
-      function despertar() {
-        if (!esperando) return;         // otro evento nos desperto primero
+      function quitar() {
         esperando = false;
+        dejarDeEsperar = null;
         window.removeEventListener("online", despertar);
         document.removeEventListener("visibilitychange", alVerse);
+      }
+      function despertar() {
+        if (!esperando) return;         // otro evento nos desperto primero
+        quitar();
+        if (cerradoPorNosotros) return; // nos cerraron mientras esperabamos
         intentos = 0;                   // volver es buena señal: reintenta ya
         conectar();
       }
       function alVerse() {
         if (!debeEsperar()) despertar();
       }
+      dejarDeEsperar = quitar;
       window.addEventListener("online", despertar);
       document.addEventListener("visibilitychange", alVerse);
     }
 
     function forzarReconexion() {
       intentos = 0;
+      cerradoPorNosotros = false;       // reconectar a mano cancela el close()
+      if (dejarDeEsperar) dejarDeEsperar();
       if (ws && ws.readyState === WebSocket.OPEN) {
-        cerradoPorNosotros = false;
         ws.close(1000);
       }
       conectar();
@@ -247,6 +259,10 @@
     function close(code, reason) {
       cerradoPorNosotros = true;
       clearTimeout(temporizador);
+      // Si estabamos aparcados esperando a que vuelva la red, hay que
+      // desmontar esos listeners: si no, el "online" de dentro de un rato
+      // reconectaria un socket que ya diste por cerrado.
+      if (dejarDeEsperar) dejarDeEsperar();
       if (ws) ws.close(code || 1000, reason || "");
       return api;
     }

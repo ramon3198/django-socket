@@ -16,7 +16,6 @@ entre si aunque el servidor viva en otro proceso.
 """
 
 import asyncio
-import json
 import os
 import statistics
 import subprocess

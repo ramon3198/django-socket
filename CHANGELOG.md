@@ -4,6 +4,43 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 Versioning: while below 1.0, **minor versions may change the API**. Patch
 versions never do.
 
+## [0.2.2] — 2026-08-27
+
+### Fixed
+
+- **`broadcast_sync` from a Celery worker silently dropped the fan-out.** This
+  is the pattern the examples lead with — a background task pushing progress —
+  and it did not work. A process that only publishes (a Celery worker, a cron,
+  a management command) never calls the layer's `startup()`: there is no
+  websocket connection and no lifespan event to trigger it. So `_redis` was
+  `None`, the `publish` raised `AttributeError`, and the `except` meant for
+  Redis outages swallowed it — logging a message that blamed Redis, which was
+  perfectly healthy. The publisher now connects lazily on first `send()`, and a
+  failure to *create* the client is reported separately from a failure to
+  publish. Regression test covers a publisher-only process.
+
+- **`__version__` said `0.1.0` while PyPI said `0.2.1`.** The two were declared
+  independently and drifted, so anyone reading it to file a bug reported the
+  wrong version. The module is now the single source and `pyproject.toml` reads
+  it via `dynamic`, which makes drift structurally impossible.
+
+- **The JS client could revive a socket the application had closed.** If
+  `close()` was called while the client was parked waiting for the browser's
+  `online` event, nothing tore down that listener, and `conectar()` cleared the
+  deliberate-close flag unconditionally. When the network came back, the socket
+  reconnected — a user who logged out kept receiving messages. `close()` now
+  dismantles the offline wait, and only `reconnect()` clears the flag.
+
+- `evict()` used the deprecated `asyncio.get_event_loop()`.
+
+### Added
+
+- Python 3.14 in the CI matrix and the classifiers.
+- `ruff check` in CI, with an explicit ruleset (`E`, `F`, `I`, 88 columns) in
+  `pyproject.toml` rather than the installed version's defaults. CONTRIBUTING
+  promised a style nothing verified; now it does. It found no real defects —
+  only unused imports and formatting — which is itself worth knowing.
+
 ## [0.2.1] — 2026-08-27
 
 ### Fixed

@@ -400,3 +400,26 @@ test("on() encadena", () => {
   const s = djangoSocket("/x/");
   assert.equal(s.on("a", () => {}).on("b", () => {}), s);
 });
+
+test("close() durante la espera sin red NO debe revivir el socket", () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  const s = djangoSocket("/x/", { minDelay: 100 });
+  FakeWS.ultima.abrir();
+
+  // Se cae la red: el reintento queda aparcado esperando el evento "online".
+  globalThis.navigator.onLine = false;
+  FakeWS.ultima.caer(1006);
+  mock.timers.tick(100000);
+  assert.equal(FakeWS.instancias.length, 1, "no debe reintentar sin red");
+
+  // La aplicacion cierra el socket a proposito (un logout, por ejemplo).
+  s.close();
+
+  // Vuelve la red. El socket NO debe resucitar: lo cerramos nosotros.
+  globalThis.navigator.onLine = true;
+  mandos.ventana.disparar("online");
+
+  assert.equal(FakeWS.instancias.length, 1,
+    "revivio un socket que la aplicacion habia cerrado");
+  mock.timers.reset();
+});

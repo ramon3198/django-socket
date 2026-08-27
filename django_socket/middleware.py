@@ -118,7 +118,8 @@ def max_conexiones_por_usuario(limite: int = 5, code: int = 4429):
 
     async def middleware(sock, siguiente):
         user = getattr(sock, "user", None)
-        clave = getattr(user, "pk", None) if getattr(user, "is_authenticated", False) else None
+        autenticado = getattr(user, "is_authenticated", False)
+        clave = getattr(user, "pk", None) if autenticado else None
         if clave is None:
             clave = (sock.client or ("?", 0))[0]      # anonimos, por IP
 

@@ -284,3 +284,54 @@ async def test_un_mensaje_corrupto_no_mata_el_listener(capas, caplog):
     a, _ = capas
     await a._entregar({"data": b"esto no es json"})
     assert "ilegible" in caplog.text
+
+
+# ------------------------------------------- procesos que SOLO publican
+
+
+async def test_publicar_sin_haber_llamado_a_startup(url_redis, transporte):
+    """
+    Un worker de Celery, un cron o un management command solo publican: no
+    tienen conexiones websocket ni evento lifespan, asi que nadie llama a
+    `startup()`.
+
+    Antes esto perdia el mensaje en silencio -- `_redis` era None, el publish
+    lanzaba AttributeError y el except lo enmascaraba como una caida de Redis.
+    Era justo el caso de la barra de progreso de Celery que documentan los
+    ejemplos, o sea el mas buscado de todos.
+    """
+    receptor = RedisLayer(url=url_redis, prefix="solopub")
+    await receptor.startup()                    # este si es un proceso web
+    sock, t = socket_falso(transporte, receptor)
+    await sock.join("tarea:1")
+
+    # Y este es el "worker": capa nueva, sin startup().
+    publicador = RedisLayer(url=url_redis, prefix="solopub")
+    assert publicador._redis is None, "no deberia haber conectado todavia"
+
+    try:
+        await publicador.send("tarea:1", {"progreso": 50})
+        assert publicador._redis is not None, "send() deberia haber conectado"
+        assert await esperar(lambda: t.textos), "el mensaje se perdio"
+        assert json.loads(t.textos[-1]) == {"progreso": 50}
+    finally:
+        await publicador.shutdown()
+        await receptor.shutdown()
+
+
+async def test_el_publicador_perezoso_no_arranca_el_listener(url_redis):
+    """Quien solo publica no necesita suscribirse: seria una conexion de mas."""
+    capa = RedisLayer(url=url_redis, prefix="solopub")
+    try:
+        await capa.send("g", "x")
+        assert capa._redis is not None, "deberia tener cliente para publicar"
+        assert capa._listener is None, "no deberia haber montado el listener"
+    finally:
+        await capa.shutdown()
+
+
+async def test_una_url_invalida_lo_dice_en_vez_de_callar(caplog):
+    """Si no se puede ni crear el cliente, que el log diga que mirar."""
+    capa = RedisLayer(url="esto-no-es-una-url")
+    await capa.send("g", "x")           # no debe lanzar
+    assert "REDIS_URL" in caplog.text

@@ -9,7 +9,6 @@ from django_socket.testing import (
     WebSocketDisconnect,
 )
 
-
 # --------------------------------------------------------------- lo basico
 
 

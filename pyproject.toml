@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "django-socket"
-version = "0.2.1"
+dynamic = ["version"]
 description = "WebSockets for Django: one decorator, one async function, one line in INSTALLED_APPS."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,6 +34,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Internet :: WWW/HTTP",
     "Typing :: Typed",
 ]
@@ -60,6 +61,9 @@ dev = [
     "coverage>=7",
 ]
 
+[tool.setuptools.dynamic]
+version = {attr = "django_socket.__version__"}
+
 [tool.setuptools]
 packages = [
     "django_socket",
@@ -76,3 +80,26 @@ DJANGO_SETTINGS_MODULE = "tests.settings"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = ["error::RuntimeWarning"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+# Conjunto explicito, no el que traiga la version de turno: pyflakes (bugs
+# reales), errores de pycodestyle, e imports ordenados. Deliberadamente fuera
+# quedan BLE001 y S110: esta libreria tiene `except Exception: pass` a
+# proposito en varios sitios -- cerrar un socket cuyo cliente ya se fue, por
+# ejemplo -- y activarlos solo llenaria el codigo de noqa.
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Los tests declaran handlers dentro de la funcion de test; no se "usan" pero
+# el decorador @ws los registra. Y en tests y bancos de pruebas una linea larga
+# suele ser una asercion o una URL que parte peor de lo que gana: la libreria
+# si respeta los 88, que es donde importa.
+"tests/*" = ["F811", "E501"]
+"test_*.py" = ["F811", "E501"]
+"bench_*.py" = ["E501"]
+# Generado por `django-admin startproject`: no es codigo nuestro.
+"demo/settings.py" = ["E501"]

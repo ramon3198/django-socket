@@ -1,7 +1,6 @@
 """Autenticacion conectable: token, autenticadores propios, y el orden."""
 
 import pytest
-from django.contrib.auth.models import AnonymousUser
 from django.test import override_settings
 
 from django_socket import dispatch, extraer_token, ws
@@ -90,7 +89,7 @@ async def resolver_de_prueba(crudo):
     }
 )
 async def test_un_token_valido_autentica(crear_usuario):
-    user = await crear_usuario("ramon")
+    await crear_usuario("ramon")
 
     @ws("feed/")
     async def feed(sock):

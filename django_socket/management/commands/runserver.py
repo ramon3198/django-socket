@@ -20,7 +20,7 @@ class Command(RunserverCommand):
         parser.add_argument(
             "--log-level",
             default="info",
-            help="Nivel de log de uvicorn (critical, error, warning, info, debug, trace).",
+            help="Nivel de log de uvicorn (error, warning, info, debug, trace).",
         )
 
     def run(self, **options):

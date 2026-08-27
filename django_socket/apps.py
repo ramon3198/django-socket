@@ -14,8 +14,11 @@ class DjangoSocketConfig(AppConfig):
         from django.conf import settings
         from django.utils.module_loading import autodiscover_modules
 
-        from . import checks  # noqa: F401  (se registran al importarse)
-        from . import patch, routing
+        from . import (
+            checks,  # noqa: F401  (se registran al importarse)
+            patch,
+            routing,
+        )
 
         # Importa <cada_app>/sockets.py, igual que el admin con admin.py.
         autodiscover_modules("sockets")

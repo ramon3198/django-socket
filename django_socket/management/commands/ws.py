@@ -44,11 +44,11 @@ class Command(BaseCommand):
         self._row(
             "Origenes permitidos",
             conf.get("ALLOWED_ORIGINS")
-            or f"ALLOWED_HOSTS={list(settings.ALLOWED_HOSTS) or '[] (DEBUG: localhost)'}",
+            or f"ALLOWED_HOSTS={list(settings.ALLOWED_HOSTS) or '[] (DEBUG)'}",
         )
         self._row(
             "Origin ausente",
-            "rechazado" if conf.get("REQUIRE_ORIGIN") else "aceptado (clientes nativos)",
+            "rechazado" if conf.get("REQUIRE_ORIGIN") else "aceptado (nativos)",
         )
 
         if settings.DEBUG and conf.get("LAYER", "memory") == "memory":

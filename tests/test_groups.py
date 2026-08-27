@@ -21,7 +21,8 @@ async def test_join_y_broadcast_llega_a_todos(transporte):
     await b.join("sala")
 
     await a.broadcast({"hola": 1})
-    await a.drain(); await b.drain()
+    await a.drain()
+    await b.drain()
 
     assert ta.textos[-1] == '{"hola": 1}'
     assert tb.textos[-1] == '{"hola": 1}'

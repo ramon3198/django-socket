@@ -12,9 +12,8 @@ from urllib.parse import urlparse
 
 from asgiref.sync import ThreadSensitiveContext
 
-from . import authentication
+from . import authentication, groups, routing
 from . import middleware as mw
-from . import groups, routing
 from .websocket import InvalidJSON, RateLimited, WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger("django_socket")

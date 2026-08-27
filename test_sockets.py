@@ -154,6 +154,7 @@ async def test_orm_en_handler():
 async def test_asgi_sin_configurar():
     """El asgi.py de startproject sirve WebSockets sin editarlo."""
     from django.conf import settings
+
     import demo.asgi
 
     fuente = open(demo.asgi.__file__, encoding="utf-8").read()
@@ -169,7 +170,9 @@ async def test_asgi_sin_configurar():
 
 def crear_sesion():
     """Genera una sesion autenticada real, como si el usuario hubiera hecho login."""
-    import os, django
+    import os
+
+    import django
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "demo.settings")
     django.setup()
     from django.contrib.auth import BACKEND_SESSION_KEY, HASH_SESSION_KEY, SESSION_KEY

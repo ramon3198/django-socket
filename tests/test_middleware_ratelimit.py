@@ -1,6 +1,5 @@
 """Middleware y limite de tasa: lo que un proyecto grande necesita alrededor."""
 
-import asyncio
 
 import pytest
 from django.test import override_settings

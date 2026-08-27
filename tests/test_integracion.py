@@ -8,7 +8,6 @@ from django.test import override_settings
 
 from django_socket import patch, ws
 
-
 # ------------------------------------------------------------------- parche
 
 
@@ -44,9 +43,9 @@ async def test_el_handler_de_django_ahora_acepta_websocket(transporte):
 
 async def test_el_http_sigue_yendo_a_django():
     """Ampliar la puerta no debe desviar el trafico normal."""
-    from django.core.handlers.asgi import ASGIHandler
-
     import asyncio
+
+    from django.core.handlers.asgi import ASGIHandler
 
     recibido = []
     cuerpo_enviado = False
@@ -240,3 +239,27 @@ def test_el_js_va_dentro_del_paquete():
     fuente = js.read_text(encoding="utf-8")
     assert "global.djangoSocket" in fuente
     assert "esDefinitivo" in fuente         # la logica de no-reintentar
+
+
+def test_la_version_esta_declarada_una_sola_vez():
+    """
+    `__version__` vive en el modulo y `pyproject.toml` la lee de ahi con
+    `dynamic`. Antes se declaraban por separado y divergieron: el modulo decia
+    0.1.0 mientras PyPI iba por 0.2.1, asi que quien la leyera para reportar un
+    bug daba una version que no era.
+    """
+    import re
+    from pathlib import Path
+
+    import django_socket
+
+    assert re.fullmatch(r"\d+\.\d+\.\d+\S*", django_socket.__version__), (
+        f"version con pinta rara: {django_socket.__version__!r}"
+    )
+
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    if pyproject.is_file():
+        texto = pyproject.read_text(encoding="utf-8")
+        assert 'dynamic = ["version"]' in texto, (
+            "pyproject volvio a declarar la version a mano; pueden divergir"
+        )

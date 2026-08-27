@@ -11,6 +11,7 @@ pip install -e ".[dev]"
 ```bash
 pytest                              # ~10 s, starts no server
 node --test tests/js/*.test.js      # the JS client, no npm install needed
+ruff check .                        # style; CI runs this too
 ```
 
 Both suites run offline. The Python one talks ASGI straight to the dispatcher
@@ -60,7 +61,9 @@ numbers in the PR. The README's performance figures should stay true.
 
 ## Style
 
-- Line length 88.
+- Line length 88, enforced by `ruff check .` in CI. The ruleset is explicit in
+  `pyproject.toml` (`E`, `F`, `I`) rather than whatever the installed ruff
+  version defaults to, so it doesn't drift under you.
 - Comments and docstrings explain the *why*. The code already says the what.
 - Error messages tell the reader what to do next, not just what went wrong.
   `"@ws espera 'async def', y X es una función normal"` followed by what to use
@@ -68,7 +71,7 @@ numbers in the PR. The README's performance figures should stay true.
 
 ## CI
 
-Every push runs Django 4.2 → 6.1 across Python 3.10 → 3.13, the JS suite, and
+Every push runs ruff, Django 4.2 → 6.1 across Python 3.10 → 3.14, the JS suite, and
 integration against a real server with Redis. It has to be green before merge.
 
 Note it only runs on Linux. If you develop on Windows or macOS, say so in the

@@ -115,18 +115,36 @@ class RedisLayer(MemoryLayer):
         # entregamos localmente.
         self._origin = f"{id(self)}"
 
-    async def startup(self) -> None:
+    def _conectar(self):
+        """
+        Crea el cliente de Redis. Idempotente.
+
+        Vive aparte de `startup()` porque hay procesos que solo publican -- un
+        worker de Celery, un cron, un management command -- y ahi nadie llama a
+        `startup()`: no hay conexiones websocket ni evento lifespan que lo
+        disparen. Sin esto, `send()` encontraba `_redis = None`, el publish
+        lanzaba AttributeError, el except lo enmascaraba como caida de Redis y
+        el mensaje se perdia en silencio. Justo el caso de la barra de progreso
+        de Celery, que es el mas buscado.
+        """
+        if self._redis is not None:
+            return self._redis
         try:
             import redis.asyncio as aioredis
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError(
-                "RedisLayer necesita el paquete 'redis'. Instalalo con: pip install redis"
+                "RedisLayer necesita el paquete 'redis'. Instalalo con:\n"
+                "  pip install redis"
             ) from exc
         self._redis = aioredis.from_url(
             self.url,
             health_check_interval=self.LATIDO,   # sin esto no detecta la caida
             retry_on_timeout=True,
         )
+        return self._redis
+
+    async def startup(self) -> None:
+        self._conectar()
         self._pubsub = self._redis.pubsub()
         await self._pubsub.subscribe(self.channel)
         self._conectado = True
@@ -155,10 +173,24 @@ class RedisLayer(MemoryLayer):
         await self._deliver_local(group, data, exclude=exclude)
         # ...y avisa al resto de procesos.
         carga = json.dumps(
-            {"group": group, "data": data, "origin": self._origin}, default=str
+            {"group": group, "data": data, "origin": self._origin},
+            default=str,
         )
         try:
-            await self._redis.publish(self.channel, carga)
+            # Conexion perezosa: un proceso que solo publica nunca paso por
+            # startup(), y antes eso hacia que el mensaje se perdiera callando.
+            redis = self._conectar()
+        except Exception as exc:
+            logger.error(
+                "django_socket: no se pudo crear el cliente de Redis (%s: %s). "
+                "El grupo %r solo recibio la entrega local. Revisa REDIS_URL y "
+                "que el paquete 'redis' este instalado.",
+                type(exc).__name__, exc, group,
+            )
+            return
+
+        try:
+            await redis.publish(self.channel, carga)
         except Exception as exc:
             # Que Redis falle no puede tumbar la conexion del usuario: la
             # entrega local ya se hizo y el handler debe seguir vivo. Se pierde
@@ -211,7 +243,10 @@ class RedisLayer(MemoryLayer):
         await self._deliver_local(payload["group"], payload["data"])
 
     async def _resuscribir(self) -> None:
-        """Vuelve a suscribirse tras un corte. Si Redis sigue caido, lo dira el bucle."""
+        """Vuelve a suscribirse tras un corte.
+
+        Si Redis sigue caido, lo dira el bucle en la siguiente vuelta.
+        """
         try:
             await self._pubsub.aclose()
         except Exception:

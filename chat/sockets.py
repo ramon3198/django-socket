@@ -1,10 +1,10 @@
 """Todo el codigo WebSocket de la app. Comparalo con un consumer de Channels."""
 
 from asgiref.sync import sync_to_async
-from django.utils import timezone
 from django.contrib.auth.models import User
+from django.utils import timezone
 
-from django_socket import login_required, ws
+from django_socket import Events, login_required, ws
 
 
 @ws("echo/")
@@ -88,8 +88,6 @@ async def grupo(sock, sala):
 
 # --------------------------------------------------------------------- Events
 # Protocolo JSON con varios tipos de mensaje, sin el if/elif de siempre.
-
-from django_socket import Events
 
 tablero = Events()
 
