@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "django-socket"
 version = "0.1.0"
-description = "WebSockets en Django: pip install y una linea en INSTALLED_APPS."
+description = "WebSockets for Django: one decorator, one async function, one line in INSTALLED_APPS."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

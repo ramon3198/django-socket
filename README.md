@@ -3,62 +3,63 @@
 [![tests](https://github.com/ramon3198/django-socket/actions/workflows/tests.yml/badge.svg)](https://github.com/ramon3198/django-socket/actions/workflows/tests.yml)
 [![python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-blue)](https://github.com/ramon3198/django-socket)
 [![django](https://img.shields.io/badge/django-4.2%20%E2%80%93%206.1-0C4B33)](https://github.com/ramon3198/django-socket)
-[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![license](https://img.shields.io/badge/license-MIT-green)](https://github.com/ramon3198/django-socket/blob/main/LICENSE)
 
-**WebSockets en Django sin Channels.** Instalar son dos pasos y escribir un
-handler es una función.
+**English** · [Español](https://github.com/ramon3198/django-socket/blob/main/README.es.md)
+
+**WebSockets for Django.** One decorator, one `async` function, and it runs.
 
 ```python
-# miapp/sockets.py
+# myapp/sockets.py
 from django_socket import ws
 
 @ws("chat/<str:room>/", group="room:{room}")
 async def chat(sock, room):
     async for msg in sock:
-        await sock.broadcast({"de": str(sock.user), "texto": msg.text})
+        await sock.broadcast({"from": str(sock.user), "text": msg.text})
 ```
 
-Ese es el archivo entero. Ni `accept()`, ni `connect()`, ni `disconnect()`, ni
-`routing.py`, ni `AuthMiddlewareStack`, ni `channel_layer`, ni `async_to_sync`.
+That's the whole file. Connection state lives in local variables, disconnect is
+the code after the loop, and Django's user is right where you'd expect it.
 
 ---
 
-## Índice
+## Contents
 
-**Empezar** ·
-[Instalación](#instalación) ·
-[Tu primer socket en 5 minutos](#tu-primer-socket-en-5-minutos) ·
-[Por qué no hace falta tocar `asgi.py`](#por-qué-no-hace-falta-tocar-asgipy)
+**Getting started** ·
+[Install](#install) ·
+[Your first socket in 5 minutes](#your-first-socket-in-5-minutes) ·
+[Why you don't touch `asgi.py`](#why-you-dont-touch-asgipy)
 
-**Guía** ·
-[El decorador `@ws`](#el-decorador-ws) ·
-[El objeto `sock`](#el-objeto-sock) ·
-[Grupos y broadcast](#grupos-y-broadcast) ·
+**Guide** ·
+[The `@ws` decorator](#the-ws-decorator) ·
+[The `sock` object](#the-sock-object) ·
+[Groups and broadcast](#groups-and-broadcast) ·
 [JSON](#json) ·
-[`Events`](#enrutar-por-tipo-con-events) ·
-[Autenticación](#usuarios-y-autenticación) ·
-[Cliente JavaScript](#cliente-javascript) ·
-[Testear](#testear-tus-handlers)
+[`Events`](#routing-by-message-type-with-events) ·
+[Authentication](#users-and-authentication) ·
+[JavaScript client](#javascript-client) ·
+[Testing](#testing-your-handlers)
 
-**Operación** ·
-[Producción](#producción) ·
-[Seguridad](#seguridad-validación-de-origen) ·
-[Clientes lentos](#clientes-lentos) ·
-[Conexiones zombis](#conexiones-zombis) ·
-[Configuración](#configuración-completa) ·
-[Códigos de cierre](#códigos-de-cierre)
+**Operations** ·
+[Production](#production) ·
+[Security](#security-origin-validation) ·
+[Slow clients](#slow-clients) ·
+[Zombie connections](#zombie-connections) ·
+[Settings](#all-settings) ·
+[Close codes](#close-codes)
 
-**Referencia** ·
-[Comparación con Channels](#comparación-con-channels) ·
-[Rendimiento](#rendimiento) ·
-[Límites conocidos](#límites-conocidos) ·
-[Desarrollo](#desarrollo)
+**Reference** ·
+[How it works inside](#how-it-works-inside) ·
+[Performance](#performance) ·
+[Known limits](#known-limits) ·
+[Development](#development)
 
 ---
 
-# Empezar
+# Getting started
 
-## Instalación
+## Install
 
 ```bash
 pip install django-socket
@@ -72,33 +73,35 @@ INSTALLED_APPS = [
 ]
 ```
 
-**Ya está. No hay tercer paso.**
+**That's it. There is no third step.**
 
-No tocas `asgi.py`, no declaras `ASGI_APPLICATION`, no configuras Redis, no
-cambias de servidor. El `asgi.py` que generó `startproject` sirve WebSockets tal
-cual, y `manage.py runserver` los sirve en el mismo puerto que el HTTP.
+You don't touch `asgi.py`, you don't declare `ASGI_APPLICATION`, you don't set
+up Redis, you don't switch servers. The `asgi.py` that `startproject` generated
+serves WebSockets as-is, and `manage.py runserver` serves them on the same port
+as HTTP.
 
-Requisitos: Python 3.10+, Django 4.2+. En desarrollo hace falta
+Requires Python 3.10+ and Django 4.2+. For development you also need
 `pip install "uvicorn[standard]"`.
 
 ---
 
-## Tu primer socket en 5 minutos
+## Your first socket in 5 minutes
 
-### 1. Escribe el handler
+### 1. Write the handler
 
-Crea `<tu_app>/sockets.py`. Se autodescubre solo, igual que `admin.py`:
+Create `<your_app>/sockets.py`. It is auto-discovered, the same way `admin.py`
+is:
 
 ```python
 from django_socket import ws
 
-@ws("eco/")
-async def eco(sock):
+@ws("echo/")
+async def echo(sock):
     async for msg in sock:
-        await sock.send(f"dijiste: {msg.text}")
+        await sock.send(f"you said: {msg.text}")
 ```
 
-### 2. Comprueba que está registrado
+### 2. Check it registered
 
 ```bash
 python manage.py ws
@@ -106,7 +109,7 @@ python manage.py ws
 
 ```
 Rutas WebSocket
-  ws:///eco/                    miapp.sockets.eco
+  ws:///echo/                   myapp.sockets.echo
 
 Integracion
   Capa de difusion      memory
@@ -115,70 +118,70 @@ Integracion
   Origin ausente        aceptado (clientes nativos)
 ```
 
-Este comando es lo primero que deberías ejecutar cuando algo no funcione: te
-dice qué rutas hay, con qué grupo, y cómo está montada la integración.
+Run this first whenever something doesn't work: it tells you which routes exist,
+with which group, and how the integration is wired.
 
-### 3. Arranca y pruébalo
+### 3. Start it and try it
 
 ```bash
 python manage.py runserver
 ```
 
-Desde la consola del navegador, en cualquier página de tu sitio:
+From the browser console, on any page of your site:
 
 ```js
-const s = new WebSocket("ws://localhost:8000/eco/");
+const s = new WebSocket("ws://localhost:8000/echo/");
 s.onmessage = (e) => console.log(e.data);
-s.onopen = () => s.send("hola");
-// -> dijiste: hola
+s.onopen = () => s.send("hi");
+// -> you said: hi
 ```
 
-### 4. Ahora una sala de chat
+### 4. Now a chat room
 
 ```python
 @ws("chat/<str:room>/", group="room:{room}")
 async def chat(sock, room):
-    quien = sock.user.username if sock.user.is_authenticated else "anónimo"
+    who = sock.user.username if sock.user.is_authenticated else "anonymous"
 
-    await sock.broadcast({"tipo": "entra", "quien": quien}, exclude_self=True)
+    await sock.broadcast({"kind": "join", "who": who}, exclude_self=True)
 
     async for msg in sock:
-        await sock.broadcast({"tipo": "mensaje", "quien": quien, "texto": msg.text})
+        await sock.broadcast({"kind": "message", "who": who, "text": msg.text})
 
-    # Se llega aquí cuando el cliente cierra.
-    await sock.broadcast({"tipo": "sale", "quien": quien})
+    # Reached when the client goes away.
+    await sock.broadcast({"kind": "leave", "who": who})
 ```
 
-Todo lo que necesitas saber está en esas líneas:
+Everything you need to know is in those lines:
 
-- **`<str:room>`** es la sintaxis de `django.urls.path`. Llega al handler ya
-  convertido (`<int:pk>` te da un `int` de verdad).
-- **`group="room:{room}"`** se rellena con ese parámetro. El socket entra al
-  conectar y sale al desconectar, sin que llames a nada.
-- **`sock.broadcast(...)`** va a ese grupo por defecto.
-- **`sock.user`** es el usuario de Django, resuelto de la cookie de sesión.
-- **El código después del `for`** se ejecuta cuando el cliente se va. Ese es tu
+- **`<str:room>`** is `django.urls.path` syntax. It reaches the handler already
+  converted (`<int:pk>` gives you a real `int`).
+- **`group="room:{room}"`** is filled from that parameter. The socket joins on
+  connect and leaves on disconnect, without you calling anything.
+- **`sock.broadcast(...)`** goes to that group by default.
+- **`sock.user`** is the Django user, resolved from the session cookie.
+- **The code after the `for`** runs when the client leaves. That's your
   `disconnect`.
 
 ---
 
-## Por qué no hace falta tocar `asgi.py`
+## Why you don't touch `asgi.py`
 
-Django ya es ASGI desde la 3.0. Lo único que hace su handler con un WebSocket es
-esto:
+Django has been ASGI since 3.0. All its handler does with a WebSocket is this:
 
 ```python
 if scope["type"] != "http":
     raise ValueError("Django can only handle ASGI/HTTP connections, not %s.")
-    # el propio Django deja ahí un "FIXME: Allow to override this."
+    # Django itself leaves a "FIXME: Allow to override this." right there.
 ```
 
-Django no es que *no pueda* hablar WebSocket — se niega a mirar ese scope. Y
-como `django.setup()` ejecuta los `ready()` de las apps **antes** de instanciar
-el handler, desde nuestro `AppConfig.ready()` llegamos a tiempo de ensanchar esa
-puerta. De ahí que instalar sea solo `INSTALLED_APPS`.
+It isn't that Django *can't* speak WebSocket — it refuses to look at that scope.
+And since `django.setup()` runs every app's `ready()` **before** instantiating
+the handler, our `AppConfig.ready()` gets there in time to widen that door. That
+is why installing is just `INSTALLED_APPS`.
 
-Si prefieres que no se toque nada tuyo, apágalo y decláralo a mano:
+If you'd rather nothing of yours be touched, turn it off and declare it
+yourself:
 
 ```python
 DJANGO_SOCKET = {"PATCH_ASGI": False}
@@ -192,158 +195,158 @@ application = ASGIApplication()
 
 ---
 
-# Guía
+# Guide
 
-## El decorador `@ws`
+## The `@ws` decorator
 
 ```python
-@ws(ruta, *, group=None, auth=True, name=None)
+@ws(route, *, group=None, auth=True, name=None)
 ```
 
 | | |
 |---|---|
-| `ruta` | Sintaxis de `django.urls.path`, con sus conversores |
-| `group` | Plantilla de grupo; entra al conectar y sale al desconectar |
-| `auth` | `False` salta la resolución de sesión (una consulta menos) |
-| `name` | Nombre para el listado de `manage.py ws` |
+| `route` | `django.urls.path` syntax, with its converters |
+| `group` | Group template; joins on connect, leaves on disconnect |
+| `auth` | `False` skips session resolution (one query less) |
+| `name` | Label for the `manage.py ws` listing |
 
 ```python
-@ws("partida/<int:pk>/jugador/<slug:nick>/")
-async def partida(sock, pk, nick):      # pk es int de verdad
+@ws("game/<int:pk>/player/<slug:nick>/")
+async def game(sock, pk, nick):      # pk really is an int
     ...
 ```
 
-Si `group=` menciona un parámetro que la ruta no tiene, **falla al importar**
-con el nombre del culpable, no en la primera conexión.
+If `group=` mentions a parameter the route doesn't have, it **fails at import
+time** naming the culprit, not on the first connection.
 
-El handler debe ser `async def`. Si le pasas una función normal, el error te
-explica por qué y qué usar en su lugar.
+The handler must be `async def`. Pass a regular function and the error explains
+why, and what to use instead.
 
 ---
 
-## El objeto `sock`
+## The `sock` object
 
-### Recibir
+### Receiving
 
 ```python
-async for msg in sock: ...          # termina cuando el cliente cierra
+async for msg in sock: ...          # ends when the client closes
 msg.text   msg.bytes   msg.json()
-if msg == "ping": ...               # Message se compara con str directamente
+if msg == "ping": ...               # Message compares against str directly
 
-await sock.receive_text()           # también receive_json / receive_bytes
-async for txt in sock.iter_text(): ...      # y iter_json()
+await sock.receive_text()           # also receive_json / receive_bytes
+async for txt in sock.iter_text(): ...      # and iter_json()
 ```
 
-### Enviar
+### Sending
 
 ```python
-await sock.send("hola")             # str    -> texto
-await sock.send(b"\x00")            # bytes  -> binario
-await sock.send({"a": 1})           # resto  -> JSON
-await sock.send_json(obj)           # también send_text / send_bytes
+await sock.send("hi")               # str    -> text frame
+await sock.send(b"\x00")            # bytes  -> binary frame
+await sock.send({"a": 1})           # rest   -> JSON
+await sock.send_json(obj)           # also send_text / send_bytes
 ```
 
-### Contexto de la conexión
+### Connection context
 
 ```python
-sock.user            # User o AnonymousUser, de la cookie de sesión
-sock.session         # SessionStore de Django
+sock.user            # User or AnonymousUser, from the session cookie
+sock.session         # Django's SessionStore
 sock.path_params     # {"room": "general"}
-sock.query_params    # {"token": "abc"}   (query_lists si se repiten claves)
+sock.query_params    # {"token": "abc"}   (query_lists for repeated keys)
 sock.headers   sock.cookies   sock.client   sock.subprotocols   sock.scope
 ```
 
 ### Control
 
 ```python
-await sock.accept(subprotocol="graphql-ws")   # solo si necesitas negociar
-await sock.close(4001, "sala llena")          # el código llega al onclose
-await sock.deny()                             # tumba el handshake con un 403
+await sock.accept(subprotocol="graphql-ws")   # only if you need to negotiate
+await sock.close(4001, "room full")           # the code reaches onclose
+await sock.deny()                             # kill the handshake with a 403
 ```
 
-No hace falta llamar a `accept()`: el handshake se completa solo la primera vez
-que envías, recibes o iteras.
+You don't need to call `accept()`: the handshake completes on its own the first
+time you send, receive or iterate.
 
 ---
 
-## Grupos y broadcast
+## Groups and broadcast
 
 ```python
-await sock.join("global")            # el primero pasa a ser el destino por defecto
+await sock.join("global")            # the first one becomes the default target
 await sock.leave("global")
 
-await sock.broadcast(data)                    # al grupo por defecto
-await sock.broadcast(data, to="otro:grupo")
+await sock.broadcast(data)                    # to the default group
+await sock.broadcast(data, to="other:group")
 await sock.broadcast(data, exclude_self=True)
 
-sock.group     # destino por defecto de broadcast()
-sock.groups    # de qué grupos eres miembro ahora mismo
+sock.group     # default target for broadcast()
+sock.groups    # which groups you're a member of right now
 ```
 
-`sock.group` y `sock.groups` no son lo mismo, a propósito. `groups` es de qué
-grupos eres **miembro** (se vacía al desconectar); `group` es a dónde apunta
-`broadcast()` por **defecto**, y sobrevive a la desconexión para que este patrón
-funcione:
+`sock.group` and `sock.groups` are deliberately different. `groups` is which
+groups you're a **member** of (it empties on disconnect); `group` is where
+`broadcast()` points by **default**, and it survives disconnection so this
+pattern works:
 
 ```python
 async for msg in sock:
     await sock.broadcast(msg.text)
-await sock.broadcast("alguien salió")     # <- aquí ya no eres miembro
+await sock.broadcast("someone left")     # <- you're no longer a member here
 ```
 
-### Desde fuera de un handler
+### From outside a handler
 
 ```python
 from django_socket import broadcast, broadcast_sync
 
-await broadcast({"aviso": "mantenimiento"}, to="room:1")   # vista o tarea async
-broadcast_sync({"aviso": "mantenimiento"}, to="room:1")    # vista sync, signal, Celery
+await broadcast({"notice": "maintenance"}, to="room:1")   # async view or task
+broadcast_sync({"notice": "maintenance"}, to="room:1")    # sync view, signal, Celery
 ```
 
-> Con la capa por defecto (`memory`) `broadcast_sync` solo alcanza al proceso
-> actual. Con varios workers necesitas Redis — ver [Producción](#producción).
+> With the default layer (`memory`), `broadcast_sync` only reaches the current
+> process. With several workers you need Redis — see [Production](#production).
 
 ---
 
 ## JSON
 
-Es el caso normal, así que va sin fricción en los dos sentidos:
+It's the common case, so it's frictionless both ways:
 
 ```python
-@ws("eco/")
-async def eco(sock):
-    async for datos in sock.iter_json():        # ya parseado
-        await sock.send_json({"vino": datos})   # dict/list -> JSON
+@ws("echo/")
+async def echo(sock):
+    async for data in sock.iter_json():         # already parsed
+        await sock.send_json({"got": data})     # dict/list -> JSON
 ```
 
-### Los tipos de Django se serializan solos
+### Django types serialize themselves
 
-Se usa `DjangoJSONEncoder`:
+`DjangoJSONEncoder` is used, so this just works:
 
 ```python
 await sock.send_json({
-    "cuando": timezone.now(),      # "2026-08-26T19:43:30.251Z"
-    "precio": Decimal("9.99"),     # "9.99"  (cadena: sin perder precisión)
+    "when": timezone.now(),        # "2026-08-26T19:43:30.251Z"
+    "price": Decimal("9.99"),      # "9.99"  (string: no precision loss)
     "id": uuid4(),                 # "0d8f...-..."
-    "aviso": _("Hola"),            # las cadenas lazy también
+    "notice": _("Hello"),          # lazy translation strings too
 })
 ```
 
 <details>
-<summary><b>Por qué la fecha importa más de lo que parece</b></summary>
+<summary><b>Why the date matters more than it looks</b></summary>
 
-Con `str()` saldría `"2026-08-26 19:43:30.251057+00:00"`, y eso tiene dos
-problemas:
+With `str()` you'd get `"2026-08-26 19:43:30.251057+00:00"`, which has two
+problems:
 
-1. **ISO-8601 es el único formato que la especificación de ECMAScript obliga a
-   `Date` a parsear.** El resto es un *fallback* de cada motor: V8 es permisivo
-   y lo acepta, otros no siempre.
-2. **`str()` emite microsegundos** (6 dígitos), que `Date` no sabe representar.
-   El encoder trunca a milisegundos, que es lo que JS entiende.
+1. **ISO-8601 is the only format the ECMAScript spec requires `Date` to
+   parse.** Anything else is each engine's fallback: V8 is lenient and accepts
+   it, others historically aren't.
+2. **`str()` emits microseconds** (6 digits), which `Date` cannot represent. The
+   encoder truncates to milliseconds, which is what JS understands.
 
 </details>
 
-### Un objeto que no sabe serializar falla de forma ruidosa
+### An object it can't serialize fails loudly
 
 ```
 TypeError: No se puede enviar un Usuario por el socket. Los tipos de Django
@@ -352,105 +355,104 @@ solos; el resto conviértelo tú: un modelo a dict, un QuerySet a lista.
 Si prefieres el comportamiento antiguo: sock.send_json(dato, default=str).
 ```
 
-Es a propósito. Callarse y mandar `"Usuario object (3)"` al navegador es peor:
-te enteras en producción.
+That's on purpose. Staying quiet and shipping `"User object (3)"` to the browser
+is worse: you find out in production.
 
-### JSON inválido es culpa del cliente, no tuya
+### Invalid JSON is the client's fault, not yours
 
-Si el cliente manda basura, la conexión se cierra con **4400 "Invalid JSON"** y
-queda un `WARNING` en el log. Ni un `1011 Internal error`, ni un traceback que
-te haga buscar un bug tuyo que no existe.
+If a client sends garbage, the connection closes with **4400 "Invalid JSON"**
+and leaves a `WARNING` in the log. Not a `1011 Internal error`, and not a
+traceback that sends you hunting for a bug of yours that doesn't exist.
 
 ```python
-from django_socket import InvalidJSON     # es una ValueError
+from django_socket import InvalidJSON     # it's a ValueError
 
 async for msg in sock:
     try:
-        datos = msg.json()
+        data = msg.json()
     except InvalidJSON:
-        await sock.send_json({"error": "eso no era JSON"})
+        await sock.send_json({"error": "that wasn't JSON"})
 ```
 
 ---
 
-## Enrutar por tipo con `Events`
+## Routing by message type with `Events`
 
-Casi toda app manda `{"type": "algo", ...}` y acaba con un if/elif largo.
-`Events` lo convierte en funciones con nombre:
+Most apps send `{"type": "something", ...}` and end up with a long if/elif.
+`Events` turns that into named functions:
 
 ```python
 from django_socket import Events, ws
 
-tablero = Events()
+board = Events()
 
-@tablero.on("dibujar")
-async def dibujar(sock, datos):
-    await sock.broadcast({"type": "dibujar", **datos}, exclude_self=True)
+@board.on("draw")
+async def draw(sock, data):
+    await sock.broadcast({"type": "draw", **data}, exclude_self=True)
 
-@tablero.on("borrar")
-async def borrar(sock):                 # si no usas los datos, no los pidas
-    await sock.broadcast({"type": "borrar"})
+@board.on("clear")
+async def clear(sock):              # if you don't use the data, don't ask for it
+    await sock.broadcast({"type": "clear"})
 
-@tablero.on("entrar", "salir")          # varios tipos de golpe
-async def mover(sock, datos): ...
+@board.on("join", "leave")          # several types at once
+async def move(sock, data): ...
 
-@tablero.on("*")                        # lo que no case con nada más
-async def resto(sock, datos): ...
+@board.on("*")                      # whatever didn't match anything else
+async def rest(sock, data): ...
 
-@ws("tablero/<str:sala>/", group="tablero:{sala}")
-async def handler(sock, sala):
-    await tablero.run(sock)
+@ws("board/<str:room>/", group="board:{room}")
+async def handler(sock, room):
+    await board.run(sock)
 ```
 
-- El campo `type` **no** llega dentro de `datos`.
-- `"*"` es un **respaldo**, no un espía: solo corre cuando nadie más cogió el
-  mensaje.
-- Un tipo que nadie maneja se ignora y deja un `WARNING` que lista los
-  registrados — casi siempre es una errata.
-- `Events(strict=True)` cierra con 4400 en su lugar.
-- `Events(key="action")` cambia el nombre del campo.
+- The `type` field does **not** arrive inside `data`.
+- `"*"` is a **fallback**, not a spy: it only runs when nobody else took the
+  message.
+- An unhandled type is ignored and leaves a `WARNING` listing the registered
+  ones — it's almost always a typo.
+- `Events(strict=True)` closes with 4400 instead.
+- `Events(key="action")` changes the field name.
 
-Es completamente opcional: `async for msg in sock` sigue ahí.
+It's entirely optional: `async for msg in sock` is still there.
 
 ---
 
-## Usuarios y autenticación
+## Users and authentication
 
-`sock.user` está siempre disponible, resuelto de la cookie de sesión del
-handshake. No hay que envolver nada en `asgi.py`.
+`sock.user` is always available, resolved from the handshake's session cookie.
+Nothing to wrap in `asgi.py`.
 
 ```python
 from django_socket import login_required, ws
 
-@ws("panel/")
-@login_required                 # cierra con 4401 si no hay sesión
-async def panel(sock):
-    await sock.send_json({"hola": sock.user.username})
+@ws("dashboard/")
+@login_required                 # closes with 4401 when there's no session
+async def dashboard(sock):
+    await sock.send_json({"hello": sock.user.username})
 ```
 
-Con `@ws(..., auth=False)` te ahorras la consulta de sesión en endpoints
-públicos.
+With `@ws(..., auth=False)` you skip the session query on public endpoints.
 
-### El ORM funciona con normalidad
+### The ORM works normally
 
 ```python
-@ws("usuarios/")
-async def usuarios(sock):
-    total = await User.objects.acount()                        # API async
-    nombres = [u.username async for u in User.objects.all()]
-    x = await sync_to_async(lambda: User.objects.first())()     # ORM síncrono
+@ws("users/")
+async def users(sock):
+    total = await User.objects.acount()                        # async API
+    names = [u.username async for u in User.objects.all()]
+    x = await sync_to_async(lambda: User.objects.first())()     # sync ORM
 ```
 
-El handler corre dentro de un `ThreadSensitiveContext`, así que
-`sync_to_async(thread_sensitive=True)` —el modo por defecto— comparte hilo igual
-que en una vista.
+The handler runs inside a `ThreadSensitiveContext`, so
+`sync_to_async(thread_sensitive=True)` — the default — shares a thread just like
+it does in a view.
 
 ---
 
-## Cliente JavaScript
+## JavaScript client
 
-Reconectar bien es de esas cosas que todo el mundo reescribe y casi nadie
-acierta. Viene incluido:
+Reconnecting properly is one of those things everyone rewrites and almost
+nobody gets right. It ships included:
 
 ```html
 {% load django_socket %}
@@ -459,134 +461,135 @@ acierta. Viene incluido:
 <script>
   const sock = djangoSocket("/chat/general/");
 
-  sock.on("mensaje", (d) => pintar(d.texto));
-  sock.on("entra",   (d) => avisar(`${d.quien} entró`));
-  sock.on("*",       (d) => console.log("sin handler:", d));
+  sock.on("message", (d) => render(d.text));
+  sock.on("join",    (d) => notify(`${d.who} joined`));
+  sock.on("*",       (d) => console.log("no handler:", d));
 
-  sock.send({type: "mensaje", texto: "hola"});   // objeto -> JSON
+  sock.send({type: "message", text: "hi"});   // object -> JSON
 </script>
 ```
 
-`ws://` o `wss://` según el protocolo de la página, JSON en los dos sentidos, y
-enrutado por `type` igual que el `Events` de Python.
+`ws://` or `wss://` depending on the page protocol, JSON both ways, and routing
+by `type` just like `Events` on the Python side.
 
-### Qué hace distinto
+### What sets it apart
 
-**No reconecta cuando el servidor cerró a propósito.** Un 4401 (falta login) o
-un 4404 (ruta inexistente) no se arreglan reintentando: reconectar ahí es un
-bucle infinito que machaca tu servidor. Se consideran definitivos el 1000, el
-1008 y todo el rango 4000–4999; el resto (1006, 1011, cortes de red) sí se
-reintenta.
+**It does not reconnect when the server closed on purpose.** A 4401 (login
+required) or a 4404 (no such route) don't get fixed by retrying: reconnecting
+there is an infinite loop hammering your server. 1000, 1008 and the whole
+4000–4999 range are treated as final; everything else (1006, 1011, network
+drops) is retried.
 
-**Backoff exponencial con jitter.** 0,5 s, 1 s, 2 s… hasta 15 s, cada espera
-multiplicada por un factor aleatorio. Sin el jitter, mil clientes que se caen a
-la vez vuelven todos en el mismo milisegundo y tumban el servidor otra vez.
+**Exponential backoff with jitter.** 0.5 s, 1 s, 2 s… up to 15 s, each wait
+multiplied by a random factor. Without jitter, a thousand clients that drop
+together all come back in the same millisecond and take the server down again.
 
-**Encola lo que escribas mientras no hay conexión** y lo suelta al reconectar.
-`send()` devuelve `false` si tuvo que encolar:
+**It queues what you write while offline** and flushes on reconnect. `send()`
+returns `false` when it had to queue:
 
 ```js
-if (!sock.send(texto)) mostrar("sin conexión: se enviará al reconectar");
+if (!sock.send(text)) show("offline: will send on reconnect");
 ```
 
-**Sin red, no gasta intentos**: espera al evento `online` del navegador. Estando
-oculta la pestaña **sí sigue reintentando**, a propósito — un chat en segundo
-plano que deja de reconectar en silencio está roto. Si tu caso tolera quedarse
-atrás, `{pauseWhenHidden: true}`.
+**With no network it doesn't burn attempts**: it waits for the browser's
+`online` event. With the tab hidden it **keeps retrying**, on purpose — a chat
+in a background tab that silently stops reconnecting is broken. If your case
+tolerates falling behind, `{pauseWhenHidden: true}`.
 
-### Opciones
+### Options
 
 ```js
-djangoSocket("/ruta/", {
-  key: "type",             // el campo que enruta
+djangoSocket("/route/", {
+  key: "type",             // the routing field
   reconnect: true,
   minDelay: 500, maxDelay: 15000, maxRetries: Infinity,
   queue: true, maxQueue: 100,
   pauseWhenHidden: false,
   protocols: ["graphql-ws"],
-  shouldReconnect: (e) => e.code !== 4001,   // tu propia regla
-  onOpen(esReconexion) {}, onClose(e, reintentara) {},
-  onRetry(intento, esperaMs) {}, onError(e) {}, onMessage(datos) {},
+  shouldReconnect: (e) => e.code !== 4001,   // your own rule
+  onOpen(isReconnect) {}, onClose(e, willRetry) {},
+  onRetry(attempt, delayMs) {}, onError(e) {}, onMessage(data) {},
 });
 ```
 
-Y `sock.connected`, `sock.pending`, `sock.close()`, `sock.reconnect()`,
-`sock.on(tipo, fn)`, `sock.off(tipo, fn)`.
+Plus `sock.connected`, `sock.pending`, `sock.close()`, `sock.reconnect()`,
+`sock.on(type, fn)`, `sock.off(type, fn)`.
 
 ---
 
-## Testear tus handlers
+## Testing your handlers
 
-Sin levantar servidor, sin puertos, en milisegundos:
+No server, no ports, milliseconds:
 
 ```python
 from django_socket.testing import WebSocketClient
 
-async def test_el_chat_reparte():
+async def test_chat_fans_out():
     async with WebSocketClient("/chat/general/") as a, \
                WebSocketClient("/chat/general/") as b:
-        await b.send_json({"type": "mensaje", "texto": "hola"})
-        assert (await a.receive_json())["texto"] == "hola"
+        await b.send_json({"type": "message", "text": "hi"})
+        assert (await a.receive_json())["text"] == "hi"
 ```
 
-Pasa por el mismo camino que una conexión real —ruta, conversores, validación de
-origen, sesión, grupos— pero hablando ASGI directamente contra el dispatcher.
+It goes through the same path a real connection does — route, converters, origin
+validation, session, groups — but speaking ASGI straight to the dispatcher.
 
 ```python
-# Usuario autenticado sin montar cookies a mano
-async with WebSocketClient("/panel/", user=mi_user) as c:
-    assert (await c.receive_json())["quien"] == "ramon"
+# Authenticated user without hand-rolling cookies
+async with WebSocketClient("/dashboard/", user=my_user) as c:
+    assert (await c.receive_json())["who"] == "ramon"
 
-# Rechazos
-async with WebSocketClient("/panel/") as c:
+# Rejections
+async with WebSocketClient("/dashboard/") as c:
     assert await c.wait_closed() == 4401
     assert not c.connected
 
-# Aislamiento entre salas
-async with WebSocketClient("/sala/uno/") as a, WebSocketClient("/sala/dos/") as b:
-    await b.send("privado")
+# Room isolation
+async with WebSocketClient("/room/one/") as a, WebSocketClient("/room/two/") as b:
+    await b.send("private")
     assert await a.receive_nothing()
 ```
 
 | | |
 |---|---|
-| `send` / `send_json` / `send_text` / `send_bytes` | `str`→texto, `bytes`→binario, resto→JSON |
-| `receive` / `receive_json` / `receive_text` / `receive_bytes` | con timeout, fallan rápido |
-| `receive_all()` | todo lo pendiente ahora mismo |
-| `receive_nothing()` | `True` si no llega nada — para afirmar aislamiento |
-| `wait_closed()` | el código de cierre |
-| `connected` `accepted` `close_code` `close_reason` `subprotocol` | estado |
+| `send` / `send_json` / `send_text` / `send_bytes` | `str`→text, `bytes`→binary, rest→JSON |
+| `receive` / `receive_json` / `receive_text` / `receive_bytes` | with timeout, fail fast |
+| `receive_all()` | everything pending right now |
+| `receive_nothing()` | `True` if nothing arrives — to assert isolation |
+| `wait_closed()` | the close code |
+| `connected` `accepted` `close_code` `close_reason` `subprotocol` | state |
 
 `WebSocketClient(path, user=, headers=, cookies=, query=, subprotocols=, origin=)`
 
-> `connected` y `accepted` no son lo mismo: `accepted` dice si llegó un
-> `websocket.accept`, y un rechazo con código se ve en el protocolo como accept
-> + close (para que el código llegue al navegador). Para «¿me dejó entrar?» usa
+> `connected` and `accepted` are not the same: `accepted` says whether a
+> `websocket.accept` arrived, and a coded rejection looks like accept + close on
+> the wire (so the code reaches the browser). For "did it let me in?" use
 > `connected`.
 
-Todos los `receive` llevan timeout de 1 s: un test que espera algo que no llega
-falla en un segundo con el path en el mensaje, en vez de colgar la suite.
+Every `receive` has a 1 s timeout: a test waiting for something that never
+arrives fails in one second, with the path in the message, instead of hanging
+the suite.
 
 ---
 
-# Operación
+# Operations
 
-## Producción
+## Production
 
-El `asgi.py` de tu proyecto ya sirve, sin cambios:
+Your project's `asgi.py` already works, unchanged:
 
 ```bash
-uvicorn miproyecto.asgi:application --host 0.0.0.0 --port 8000 --workers 4
+uvicorn myproject.asgi:application --host 0.0.0.0 --port 8000 --workers 4
 ```
 
 ```bash
-gunicorn miproyecto.asgi:application -k uvicorn.workers.UvicornWorker -w 4
+gunicorn myproject.asgi:application -k uvicorn.workers.UvicornWorker -w 4
 ```
 
-### Con más de un worker, necesitas Redis
+### With more than one worker you need Redis
 
-La capa de memoria solo conoce los sockets de su propio proceso, así que un
-broadcast no cruza de un worker a otro.
+The memory layer only knows the sockets in its own process, so a broadcast
+doesn't cross from one worker to another.
 
 ```python
 DJANGO_SOCKET = {"LAYER": "redis", "REDIS_URL": "redis://localhost:6379/0"}
@@ -596,356 +599,328 @@ DJANGO_SOCKET = {"LAYER": "redis", "REDIS_URL": "redis://localhost:6379/0"}
 pip install "django-socket[redis]"
 ```
 
-Cada proceso publica sus broadcasts en un canal pub/sub y entrega a sus miembros
-locales lo que recibe del resto. Mismo modelo que `channels_redis`, en mucho
-menos código y sin `channel_name` ni nombres de método por `type`.
+Each process publishes its broadcasts to a pub/sub channel and delivers to its
+local members whatever it receives from the rest. Your handlers don't change:
+`sock.broadcast(...)` is the same call.
 
-Verificado con dos workers reales contra Redis 7.4: el mensaje cruza en ambos
-sentidos, las salas siguen aisladas, y el proceso que publica no se entrega su
-propio eco dos veces.
+Verified with two real workers against Redis 7.4: the message crosses both ways,
+rooms stay isolated, and the publishing process doesn't deliver its own echo
+twice.
 
-### Si Redis se cae
+### When Redis goes down
 
-Un corte de Redis **no tumba las conexiones de tus usuarios**:
+A Redis outage **does not take your users' connections down**:
 
-- la entrega dentro del proceso sigue funcionando con normalidad
-- `broadcast()` no lanza; registra un `ERROR` diciendo que el grupo solo recibió
-  la entrega local
-- el proceso reintenta suscribirse con backoff exponencial (0,5 s → 10 s)
-- cuando Redis vuelve, se resuscribe solo y el fan-out se reanuda sin reiniciar
+- in-process delivery keeps working normally
+- `broadcast()` doesn't raise; it logs an `ERROR` saying the group only got
+  local delivery
+- the process retries subscribing with exponential backoff (0.5 s → 10 s)
+- when Redis returns, it resubscribes on its own and fan-out resumes without a
+  restart
 
-Lo que se publique mientras Redis está caído **se pierde**: esto es pub/sub, no
-una cola. Si necesitas garantía de entrega, eso no lo da ni esta librería ni
-`channels_redis`; hay que persistir el mensaje.
+Anything published while Redis is down **is lost**: this is pub/sub, not a
+queue. If you need delivery guarantees you have to persist the message yourself,
+with the database or a real queue.
 
 ---
 
-## Seguridad: validación de origen
+## Security: origin validation
 
-**Los WebSockets no están sujetos a la política de mismo origen.** Sin validar
-el header `Origin`, cualquier web puede abrir un socket contra la tuya y el
-navegador adjuntará las cookies de sesión de la víctima
-(*cross-site WebSocket hijacking*). Es la razón por la que Channels te obliga a
-envolver todo en `AllowedHostsOriginValidator`.
+**WebSockets are not subject to the same-origin policy.** Without validating the
+`Origin` header, any website can open a socket against yours and the browser
+will attach the victim's session cookies (*cross-site WebSocket hijacking*).
+That's why the check isn't optional.
 
-**Aquí va activado por defecto.** Se valida contra `ALLOWED_HOSTS` +
-`CSRF_TRUSTED_ORIGINS`, y un origen ajeno se rechaza con un 403 **en el
-handshake**, antes de aceptar nada.
+**It's on by default.** Validation runs against `ALLOWED_HOSTS` +
+`CSRF_TRUSTED_ORIGINS`, and a foreign origin is rejected with a 403 **during the
+handshake**, before anything is accepted.
 
-Un `Origin` **ausente** se acepta, porque los navegadores siempre lo mandan:
-solo lo omiten clientes nativos (una app móvil, un script). Si tu endpoint es
-solo para navegadores, ponlo estricto:
+A **missing** `Origin` is accepted, because browsers always send it: only native
+clients omit it (a mobile app, a script). If your endpoint is browser-only, make
+it strict:
 
 ```python
 DJANGO_SOCKET = {
     "REQUIRE_ORIGIN": True,
-    # o una lista explícita, que ignora ALLOWED_HOSTS:
-    "ALLOWED_ORIGINS": ["https://miapp.com", "https://admin.miapp.com"],
+    # or an explicit list, which ignores ALLOWED_HOSTS:
+    "ALLOWED_ORIGINS": ["https://myapp.com", "https://admin.myapp.com"],
 }
 ```
 
-`manage.py check` avisa si dejas `"*"` con `DEBUG=False`.
+`manage.py check` warns if you leave `"*"` with `DEBUG=False`.
 
 ---
 
-## Clientes lentos
+## Slow clients
 
-Un cliente que deja de leer —mala red, móvil que se duerme, o alguien con mala
-idea— no puede arrastrar a los demás.
+A client that stops reading — bad network, a phone going to sleep, or someone
+acting in bad faith — cannot drag the rest down with it.
 
 <details>
-<summary><b>El problema, medido</b></summary>
+<summary><b>The problem, measured</b></summary>
 
-uvicorn sí aplica contrapresión: acumula unos **24 MB** hacia un cliente que no
-lee y a partir de ahí `send()` deja de volver. Con un reparto que esperaba a
-cada miembro, eso significaba que `broadcast()` **no volvía nunca**: el handler
-que difunde se quedaba colgado, dejaba de leer su propio socket y jamás
-ejecutaba su limpieza. Un solo cliente en mala red mataba la sala entera.
+uvicorn does apply backpressure: it buffers about **24 MB** toward a client
+that isn't reading, and past that `send()` stops returning. With delivery that
+awaited every member, that meant `broadcast()` **never returned**: the
+broadcasting handler hung, stopped reading its own socket, and never ran its
+cleanup. One client on a bad network killed the whole room.
 
 </details>
 
-**Cómo se resuelve.** Cada socket tiene un buzón acotado y una tarea que lo
-escribe. `broadcast()` encola y vuelve; no espera a nadie. Si el buzón de alguien
-se llena, ese cliente va demasiado atrasado y se le echa con un **1013 (Try
-Again Later)** en vez de dejar que frene al grupo.
+**How it's solved.** Each socket has a bounded outbox and a task that writes it.
+`broadcast()` enqueues and returns; it waits for nobody. If someone's outbox
+fills up, that client is too far behind and gets evicted with a **1013 (Try
+Again Later)** instead of being allowed to slow the group down.
 
 ```python
 DJANGO_SOCKET = {
-    "SEND_QUEUE_MAX": 256,       # mensajes en cola por socket
+    "SEND_QUEUE_MAX": 256,       # queued messages per socket
     "SEND_QUEUE_FULL": "close",  # "close" | "drop_oldest"
 }
 ```
 
-`drop_oldest` es para flujos que toleran huecos —posiciones de cursor,
-telemetría, un contador en vivo—: mejor perder un valor viejo que echar al
-cliente. Para un chat quieres `close`.
+`drop_oldest` is for streams that tolerate gaps — cursor positions, telemetry, a
+live counter: better to lose an old value than to evict the client. For a chat
+you want `close`.
 
-**Cómo dimensionarlo.** El buzón se mide en mensajes, pero lo que importa es
-*tiempo*: `buzón ÷ mensajes_por_segundo = segundos de tolerancia`. Medido, un
-proceso publica ~1.500 broadcast/s contra Redis, así que 256 son ~165 ms en el
-peor caso y decenas de segundos al ritmo de un chat normal. La memoria solo la
-pagan los clientes atascados —uno que consume tiene el buzón a cero—, así que el
-coste es `atascados × 256 × tamaño_del_mensaje`.
+**How to size it.** The outbox is measured in messages, but what matters is
+*time*: `outbox ÷ messages_per_second = seconds of tolerance`. Measured, one
+process publishes ~1,500 broadcasts/s against Redis, so 256 is ~165 ms in the
+worst case and tens of seconds at normal chat rates. Only stuck clients pay the
+memory — one that keeps up has an empty outbox — so the cost is
+`stuck × 256 × message_size`.
 
-**`sock.send()` sigue esperando, a propósito.** Ahí el bloqueo es sano: en un
-flujo uno-a-uno, si el cliente no puede seguirte lo correcto es que tu handler
-vaya más despacio. El buzón es solo para la difusión, que es donde esperar hace
-daño.
+**`sock.send()` still waits, on purpose.** There, blocking is healthy: in a
+one-to-one stream, if the client can't keep up with you, your handler slowing
+down is the correct outcome. The outbox is only for fan-out, which is where
+waiting does damage.
 
-**En un test, `await sock.drain()`** espera a que salga lo encolado, para
-afirmar sin dormir a ciegas. En producción no hace falta.
+**In a test, `await sock.drain()`** waits for what's queued to go out, so you
+can assert without sleeping blindly. In production you don't need it.
 
 ---
 
-## Conexiones zombis
+## Zombie connections
 
-Un portátil al que le cierran la tapa deja una conexión TCP "abierta" con nadie
-al otro lado: ni `close`, ni error. Sin detección, ese socket se queda en su
-grupo para siempre y le difundes al vacío.
+A laptop whose lid gets closed leaves a TCP connection "open" with nobody on the
+other end: no `close`, no error. Without detection that socket stays in its
+group forever and you broadcast into the void.
 
-**No hace falta que hagas nada, ni que esta librería añada un heartbeat.**
-uvicorn ya manda pings de protocolo y cierra lo que no responde. Medido con un
-cliente que completa el handshake y luego se queda absolutamente mudo:
+**You don't have to do anything, and this library doesn't need to add a
+heartbeat.** uvicorn already sends protocol pings and closes what doesn't
+answer. Measured with a client that completes the handshake and then goes
+completely silent:
 
 ```
-t=  10s  en el grupo: 1
-t=  20s  en el grupo: 1
-t=  30s  en el grupo: 1
-detectado y limpiado a los 39s
+t=  10s  in the group: 1
+t=  20s  in the group: 1
+t=  30s  in the group: 1
+detected and cleaned up after 39s
 ```
 
-39 segundos: `ws_ping_interval` (20 s) + `ws_ping_timeout` (20 s). El handler
-sale por su `finally`, el socket abandona sus grupos y todo se limpia solo.
+39 seconds: `ws_ping_interval` (20 s) + `ws_ping_timeout` (20 s). The handler
+exits through its `finally`, the socket leaves its groups, everything cleans up
+by itself.
 
-Si necesitas detectarlo antes:
+If you need it detected sooner:
 
 ```bash
-uvicorn proyecto.asgi:application --ws-ping-interval 5 --ws-ping-timeout 5
+uvicorn project.asgi:application --ws-ping-interval 5 --ws-ping-timeout 5
 ```
 
-> Esto es comportamiento de uvicorn, no del protocolo. Con otro servidor ASGI,
-> compruébalo.
+> This is uvicorn behaviour, not protocol behaviour. With a different ASGI
+> server, check it.
 
 ---
 
-## Configuración completa
+## All settings
 
-Todo opcional. Estos son los valores por defecto:
+Everything is optional. These are the defaults:
 
 ```python
 DJANGO_SOCKET = {
     "LAYER": "memory",            # "memory" | "redis" | callable -> BaseLayer
     "REDIS_URL": "redis://localhost:6379/0",
-    "PREFIX": "djws",             # prefijo del canal de Redis
+    "PREFIX": "djws",             # Redis channel prefix
     "ALLOWED_ORIGINS": None,      # None = ALLOWED_HOSTS + CSRF_TRUSTED_ORIGINS
-    "REQUIRE_ORIGIN": False,      # True = rechaza también sin Origin
-    "PATCH_ASGI": True,           # False = declara ASGIApplication() tú mismo
-    "SEND_QUEUE_MAX": 256,        # mensajes encolados por socket, para difusión
-    "SEND_QUEUE_FULL": "close",   # "close" (echa al lento) | "drop_oldest"
+    "REQUIRE_ORIGIN": False,      # True = also reject requests without Origin
+    "PATCH_ASGI": True,           # False = declare ASGIApplication() yourself
+    "SEND_QUEUE_MAX": 256,        # messages queued per socket, for fan-out
+    "SEND_QUEUE_FULL": "close",   # "close" (evict the slow one) | "drop_oldest"
 }
 ```
 
-Una clave mal escrita la caza `manage.py check` (`django_socket.E001`).
+A misspelled key is caught by `manage.py check` (`django_socket.E001`).
 
 ---
 
-## Códigos de cierre
+## Close codes
 
-| Código | Significado |
+| Code | Meaning |
 |---|---|
-| `4400` | El cliente mandó algo que no es JSON válido |
-| `4401` | `@login_required` y no hay sesión |
-| `4404` | Ninguna ruta casa con ese path |
-| `1013` | El cliente no consume: buzón lleno, se le echa del grupo |
-| `1011` | Excepción sin capturar en el handler (queda en el log) |
-| HTTP 403 | Origin no permitido — el handshake ni llega a completarse |
+| `4400` | The client sent something that isn't valid JSON |
+| `4401` | `@login_required` and there's no session |
+| `4404` | No route matches that path |
+| `1013` | The client isn't consuming: outbox full, evicted from the group |
+| `1011` | Uncaught exception in the handler (it's in the log) |
+| HTTP 403 | Origin not allowed — the handshake never completes |
 
-`sock.close(code, reason)` acepta el handshake antes de cerrar si aún no estaba
-aceptado, precisamente para que tu código llegue al `onclose` del cliente.
-Cerrar sin aceptar produce un HTTP 403 y el navegador solo ve un `1006` sin
-motivo, que no le sirve a nadie para depurar.
-
----
-
-# Referencia
-
-## Comparación con Channels
-
-Una sala de chat, lado a lado.
-
-<table>
-<tr><th width="55%">Channels</th><th>django_socket</th></tr>
-<tr valign="top"><td>
-
-```python
-# consumers.py
-class ChatConsumer(AsyncWebsocketConsumer):
-    async def connect(self):
-        self.room = self.scope["url_route"]["kwargs"]["room"]
-        self.group = f"room_{self.room}"
-        await self.channel_layer.group_add(
-            self.group, self.channel_name
-        )
-        await self.accept()
-
-    async def disconnect(self, code):
-        await self.channel_layer.group_discard(
-            self.group, self.channel_name
-        )
-
-    async def receive(self, text_data=None, bytes_data=None):
-        await self.channel_layer.group_send(
-            self.group,
-            {"type": "chat.message", "text": text_data},
-        )
-
-    async def chat_message(self, event):
-        await self.send(text_data=event["text"])
-
-# routing.py
-websocket_urlpatterns = [
-    re_path(r"ws/chat/(?P<room>\w+)/$", ChatConsumer.as_asgi()),
-]
-
-# asgi.py
-application = ProtocolTypeRouter({
-    "http": get_asgi_application(),
-    "websocket": AllowedHostsOriginValidator(
-        AuthMiddlewareStack(
-            URLRouter(chat.routing.websocket_urlpatterns)
-        )
-    ),
-})
-
-# settings.py
-INSTALLED_APPS = ["channels", ...]
-ASGI_APPLICATION = "proyecto.asgi.application"
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [("127.0.0.1", 6379)]},
-    },
-}
-```
-
-</td><td>
-
-```python
-# sockets.py
-@ws("chat/<str:room>/", group="room:{room}")
-async def chat(sock, room):
-    async for msg in sock:
-        await sock.broadcast(msg.text)
-```
-
-<br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br>
-
-```python
-# settings.py
-INSTALLED_APPS = ["django_socket", ...]
-```
-
-</td></tr>
-</table>
-
-| | Channels | django_socket |
-|---|---|---|
-| Archivos a tocar | 4 | **1** |
-| `accept()` explícito | obligatorio | implícito (o explícito si quieres) |
-| Recibir mensajes | callback `receive()` | `async for msg in sock` |
-| Estado entre mensajes | atributos del consumer | variables locales |
-| Desconexión | método `disconnect()` | el código tras el `for` |
-| Broadcast | `group_send` + método handler por `type` | `sock.broadcast(dato)` |
-| Entrar/salir de grupos | `group_add` / `group_discard` a mano | `group=` en la ruta |
-| Redis | obligatorio en producción | opcional (solo multi-proceso) |
-| Usuario autenticado | `AuthMiddlewareStack` en `asgi.py` | `sock.user`, siempre |
-| Mensajes JSON por tipo | un método por `type`, con nombre mágico | `@events.on("tipo")` |
-| Testear un handler | `WebsocketCommunicator` | `WebSocketClient`, con `user=` |
-| Reconexión en el navegador | la escribes tú | `{% ws_client %}` incluido |
-
-La diferencia de fondo: en Channels el estado de una conexión vive en atributos
-de un objeto y se reparte entre callbacks. Aquí vive en el *stack de una
-corrutina*, que es donde el estado de una conexión quiere vivir.
+`sock.close(code, reason)` accepts the handshake before closing if it hadn't
+been accepted yet, precisely so your code reaches the client's `onclose`.
+Closing without accepting produces an HTTP 403 and the browser only sees a
+reasonless `1006`, which helps nobody debug.
 
 ---
 
-## Rendimiento
+# Reference
 
-Medido en un portátil, Redis 7.4 en Docker, todo contra `localhost`. Repetible:
+## How it works inside
+
+Four decisions explain almost all of the library's behaviour.
+
+### Connection state lives on a coroutine's stack
+
+A WebSocket is a conversation with a beginning and an end. Modelling it as an
+`async` function that runs start to finish means state goes in local variables
+and the flow reads top to bottom:
+
+```python
+@ws("game/<int:pk>/", group="game:{pk}")
+async def game(sock, pk):
+    hand = deal()                      # state: a local variable
+    turns = 0
+
+    async for move in sock.iter_json():
+        turns += 1
+        hand = apply(hand, move)
+        await sock.broadcast({"turns": turns})
+
+    await record_abandon(pk, turns)    # disconnect is just the end
+```
+
+There are no instance attributes to keep in sync across callbacks, and no object
+that outlives the connection. When the coroutine ends, there's nothing left to
+clean up beyond what its own `finally` already does.
+
+### Widening Django's door instead of building another one
+
+Django is already ASGI. Its handler simply refuses to look at the `websocket`
+scope, and it does so with a `FIXME` in the code. Since `django.setup()` runs
+every app's `ready()` before instantiating that handler, the `AppConfig` gets
+there in time to widen it.
+
+That's where the most visible property comes from: **installing is adding one
+line to `INSTALLED_APPS`**. No `asgi.py` to rewrite, no nested wrappers, no
+second routing tree running parallel to Django's. And HTTP traffic never passes
+through here at all.
+
+### Fan-out waits for nobody
+
+Each socket has a bounded outbox and a task that writes it. `broadcast()`
+enqueues and returns.
+
+The alternative — awaiting every member's delivery — looks simpler until you
+measure it: a client that stops reading makes `send()` stop returning, and with
+that the broadcasting handler hangs forever. It stops reading its own socket and
+never runs its cleanup. One phone with bad reception takes the whole room down.
+With an outbox, that client falls behind alone and is eventually evicted without
+dragging anyone with it.
+
+`sock.send()` does wait, and that's deliberate: in a one-to-one stream,
+backpressure is healthy. Only fan-out needs to be decoupled.
+
+### The fan-out layer is replaceable
+
+`sock.broadcast(...)` is the same call whether you're on one process or twelve.
+The only thing that changes is which layer sits underneath: in-memory for one
+process, Redis pub/sub for several, or your own implementing `BaseLayer`.
+
+Handlers never find out. There's no code to rewrite in order to scale, and no
+two paths to maintain depending on the deployment.
+
+---
+
+## Performance
+
+Measured on a laptop, Redis 7.4 in Docker, everything against `localhost`.
+Reproducible:
 
 ```bash
-python bench_redis.py      # coste de la capa
-python bench_carga.py      # conexiones concurrentes
+python bench_redis.py      # layer cost
+python bench_carga.py      # concurrent connections
 ```
 
-### Coste de la capa
+### Layer cost
 
 | | |
 |---|---|
-| broadcast, memoria, 1 miembro | 0,003 ms |
-| broadcast, memoria, 1000 miembros | 0,104 ms |
-| broadcast, Redis | ~0,65 ms → **~1.500/s por proceso** |
-| latencia de cruce entre procesos | mediana 0,59 ms · p95 0,80 ms · p99 0,90 ms |
+| broadcast, memory, 1 member | 0.003 ms |
+| broadcast, memory, 1000 members | 0.104 ms |
+| broadcast, Redis | ~0.65 ms → **~1,500/s per process** |
+| cross-process latency | median 0.59 ms · p95 0.80 ms · p99 0.90 ms |
 
-Con Redis el coste es casi plano con el número de miembros: domina el viaje a
-Redis, no el reparto local. Los ~1.500 broadcast/s son por proceso, así que
-escalan con los workers.
+With Redis the cost is nearly flat in the number of members: the round trip to
+Redis dominates, not local delivery. Those ~1,500 broadcasts/s are per process,
+so they scale with workers.
 
-### Conexiones concurrentes
+### Concurrent connections
 
-Un proceso, capa memoria, un servidor recién arrancado por medida:
+One process, memory layer, a freshly started server per measurement:
 
-| conexiones | memoria | fan-out p50 | p95 | entrega |
+| connections | memory | fan-out p50 | p95 | delivered |
 |---|---|---|---|---|
-| 1.000 | 125 MB · 122 KB/conn | 28 ms | 40 ms | 100 % |
-| 3.000 | 371 MB · 121 KB/conn | 157 ms | 200 ms | 100 % |
-| 6.000 | 741 MB · 121 KB/conn | 130 ms | 216 ms | 100 % |
+| 1,000 | 125 MB · 122 KB/conn | 28 ms | 40 ms | 100 % |
+| 3,000 | 371 MB · 121 KB/conn | 157 ms | 200 ms | 100 % |
+| 6,000 | 741 MB · 121 KB/conn | 130 ms | 216 ms | 100 % |
 
-A 6.000 conexiones: todas abren (1.600/s), y 120.000 mensajes difundidos llegan
-**sin perder ninguno**, a ~24.500 msg/s. Con la capa Redis a 1.000 conexiones el
-fan-out sube de 28 a 58 ms de mediana —el viaje a Redis— con la misma memoria y
-la misma entrega íntegra.
+At 6,000 connections: all of them open (1,600/s), and 120,000 broadcast messages
+arrive **without losing a single one**, at ~24,500 msg/s. With the Redis layer at
+1,000 connections, fan-out goes from 28 to 58 ms median — the Redis round trip —
+with the same memory and the same complete delivery.
 
-**La memoria es el límite que manda**: ~121 KB por conexión, constante desde las
-1.000 hasta las 6.000. Son unas **8.000 conexiones por GB**, y ese número no lo
-pone esta librería sino uvicorn y los búferes de socket.
+**Memory is the binding constraint**: ~121 KB per connection, constant from
+1,000 to 6,000. That's roughly **8,000 connections per GB**, and that number
+comes from uvicorn and socket buffers, not from this library.
 
-### Lo que estas cifras NO dicen
+### What these figures do NOT say
 
-- El cliente del benchmark es **un solo proceso Python** leyendo N websockets,
-  así que las latencias incluyen su propio planificador. Con clientes reales
-  repartidos serían mejores.
-- Todo es `localhost`: sin latencia de red, sin pérdida, sin TLS.
-- No se ha probado con mensajes grandes, ni con Redis remoto, ni durante horas.
+- The benchmark client is **a single Python process** reading N websockets, so
+  the latencies include its own scheduler. With real, distributed clients they'd
+  be better.
+- Everything is `localhost`: no network latency, no loss, no TLS.
+- Not tested with large messages, a remote Redis, or over hours.
 
-Vuelve a correr los benchmarks en tu entorno antes de dimensionar nada.
-
----
-
-## Límites conocidos
-
-- **Todo lo medido es `localhost`**: hay números hasta 6.000 conexiones y con
-  Redis, pero no contra red real, TLS, mensajes grandes ni sesiones largas.
-- **Django 4.2 → 6.1 y Python 3.10 → 3.13 pasan en CI**, incluido el camino
-  alternativo para el `aget_user` que no existe antes de Django 5.0: en 4.2 se
-  ejecuta de verdad, no forzado con un monkeypatch. Lo que sigue sin cubrir la
-  CI es Windows y macOS — solo corre en Linux.
-- **Los ~24 MB que uvicorn buferea por conexión** están debajo de esta capa: el
-  buzón acota lo que se acumula encima, no lo de abajo. Con 100 clientes
-  atascados a la vez son 2,4 GB que no se pueden evitar desde el nivel de
-  aplicación; eso se limita en el servidor.
-- **Sin worker de tareas en background** (el `channels.worker` de Channels).
-  Para eso usa Celery y `broadcast_sync`.
-- **Handlers síncronos no soportados**, a propósito: `@ws` exige `async def` y
-  lo explica al fallar. Un `def` normal ocuparía un hilo por conexión abierta.
-- **La resolución de rutas es lineal y gana la primera que casa**, igual que en
-  Django. Con cientos de rutas convendría indexar.
-- `broadcast_sync` con `LAYER="memory"` solo alcanza al proceso actual — es lo
-  esperable, pero es fácil tropezar en desarrollo y no verlo hasta producción.
+Re-run the benchmarks in your own environment before sizing anything.
 
 ---
 
-## Desarrollo
+## Known limits
+
+- **Everything measured is `localhost`**: there are numbers up to 6,000
+  connections and with Redis, but not against a real network, TLS, large
+  messages or long sessions.
+- **Django 4.2 → 6.1 and Python 3.10 → 3.13 pass in CI**, including the
+  alternative path for the `aget_user` that doesn't exist before Django 5.0: on
+  4.2 it really executes, not forced with a monkeypatch. What CI doesn't cover
+  is Windows and macOS — it only runs on Linux.
+- **The ~24 MB uvicorn buffers per connection** sit below this layer: the outbox
+  bounds what piles up on top, not what's underneath. With 100 stuck clients at
+  once that's 2.4 GB that can't be avoided from application level; that gets
+  limited at the server.
+- **No background task runner.** For deferred work use Celery or whatever runner
+  you already have, and notify over the socket with `broadcast_sync`.
+- **Synchronous handlers are not supported**, on purpose: `@ws` requires
+  `async def` and says so when it fails. A plain `def` would occupy a thread per
+  open connection.
+- **Route resolution is linear and first match wins**, same as Django. With
+  hundreds of routes it would want indexing.
+- `broadcast_sync` with `LAYER="memory"` only reaches the current process — it's
+  what you'd expect, but it's easy to trip over in development and not notice
+  until production.
+
+---
+
+## Development
 
 ```bash
 git clone https://github.com/ramon3198/django-socket.git && cd django-socket
@@ -956,30 +931,29 @@ pip install -e ".[dev]"
 ### Tests
 
 ```bash
-pytest                              # 207 tests, ~7 s, sin levantar nada
-node --test tests/js/*.test.js      # 35 tests del cliente JS, sin npm install
+pytest                              # 207 tests, ~7 s, nothing to start
+node --test tests/js/*.test.js      # 35 tests for the JS client, no npm install
 ```
 
-La suite de Python no necesita servidor: usa el mismo `WebSocketClient` que
-documentamos arriba, más un transporte falso para lo de más bajo nivel.
-Cobertura: **94 %**.
+The Python suite needs no server: it uses the same `WebSocketClient` documented
+above, plus a fake transport for the lower-level bits. Coverage: **94 %**.
 
-El cliente JS usa el runner y los timers falsos que trae Node (≥20), así que no
-hay que instalar nada. Cubre el backoff con jitter, qué códigos no se
-reintentan, la cola durante el corte, la pausa sin red y el enrutado por `type`.
+The JS client uses the test runner and fake timers that ship with Node (≥20), so
+there's nothing to install. It covers backoff with jitter, which codes are not
+retried, the offline queue, the no-network pause, and `type` routing.
 
-### Contra servicios reales
+### Against real services
 
 ```bash
-# Redis de verdad: los tests lo detectan solos y te dicen cuál usan
+# A real Redis: the tests detect it and tell you which one they used
 docker run -d --rm -p 6379:6379 redis:7-alpine
 pytest tests/test_redis_layer.py -s
 
-# Integración contra un servidor en marcha
+# Integration against a running server
 python manage.py runserver 8000
 python test_sockets.py 8000                 # 24 tests
 
-# Fan-out entre procesos separados (con memory, este DEBE colgarse)
+# Fan-out across separate processes (with memory, this one MUST hang)
 DJANGO_SOCKET_LAYER=redis python manage.py runserver 8091
 DJANGO_SOCKET_LAYER=redis python manage.py runserver 8092
 python test_multiproceso.py 8091 8092
@@ -992,12 +966,12 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-- `http://127.0.0.1:8000/sala/general/` — chat, ábrelo en dos pestañas. Para ver
-  la reconexión, para el servidor y vuelve a arrancarlo.
-- `chat/sockets.py` — todos los ejemplos en un archivo.
+- `http://127.0.0.1:8000/sala/general/` — chat, open it in two tabs. To see the
+  reconnect, stop the server and start it again.
+- `chat/sockets.py` — every example in one file.
 
 ---
 
-## Licencia
+## License
 
 MIT.
