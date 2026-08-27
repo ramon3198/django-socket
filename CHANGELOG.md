@@ -26,15 +26,6 @@ versions never do.
   documents the mistake that's easy to make with it. Not shipped in the wheel;
   they're reference code in the repo.
 
-## Unreleased
-
-### Added
-
-- `ejemplos/` — four runnable patterns in the demo project: background task
-  progress, per-user notifications, presence, and a live dashboard. Each one
-  documents the mistake that's easy to make with it. Not shipped in the wheel;
-  they're reference code in the repo.
-
 ## [0.2.0] — 2026-08-27
 
 ### Added
